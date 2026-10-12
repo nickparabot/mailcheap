@@ -17,6 +17,8 @@ const jobSchema = new mongoose.Schema(
 );
 
 jobSchema.index({ status: 1, runAt: 1 });
+// Recurring kinds (fetch-bounces) have exactly one job, rescheduled after each run.
+jobSchema.index({ kind: 1 }, { unique: true, partialFilterExpression: { kind: "fetch-bounces" } });
 // Finished jobs are kept a month for troubleshooting, then MongoDB deletes them.
 jobSchema.index({ finishedAt: 1 }, { expireAfterSeconds: 30 * 24 * 60 * 60 });
 

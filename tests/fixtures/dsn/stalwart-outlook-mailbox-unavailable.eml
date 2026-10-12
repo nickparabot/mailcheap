@@ -1,0 +1,88 @@
+Delivered-To: dispatch@muchiround.com
+X-Spam-Status: No
+DKIM-Signature: v=1; a=ed25519-sha256; s=v1-ed25519-20261005; d=dura.muchiround.com; c=relaxed/relaxed; r=y;
+	h=Date:Subject:Message-ID:To:From; t=1791828026; bh=suyfcrxYr08vCIXFQXOc66Q
+	ZNENVwnwrXFknuxqRby4=; b=D1cRVhsWyG8qnlp6DVK5Er/vBGFkNNlJKjltDQYMcchD02h7wB
+	6sU2mQuSv5cSui56gnsK5jA9j+Q2Gf3+koAQ==;
+DKIM-Signature: v=1; a=rsa-sha256; s=v1-rsa-20261005; d=dura.muchiround.com; c=relaxed/relaxed; r=y;
+	h=Date:Subject:Message-ID:To:From; t=1791828026; bh=suyfcrxYr08vCIXFQXOc66Q
+	ZNENVwnwrXFknuxqRby4=; b=plfE8+ld+o9grEKomfUB9Km7Yp1GZ8g4UMUP2/A+NU6cDqpiH9
+	UknIsjRyo7/eO5vBLIh7QCrfl/fL65CgbSeNS5rHPu7L96/hItFN8WaHolIxPnKWf3NpA5SlFkl
+	vLIgzlyO5plCukNNxNnn3jhfxOsxcX2ex0SSNV/zDheD0u/Z8pfpUNb8PNm0g59kpa9sIlTX2wi
+	lwTZq90HNZlS56+iK2+xTRRofnphzly47Bq70G4nJCtbgM4SlMkW+2xkjqPsotqnKNUQqZ3YAae
+	3xFHELJpAmpfcGoAVnsEGVNMkBmhnShaTMV7hp5oR6AP6X4GP8LkP4IR+p9f5SAD9xw==;
+From: "Mail Delivery Subsystem" <MAILER-DAEMON@dura.muchiround.com>
+To: dispatch@muchiround.com
+Auto-Submitted: auto-generated
+Message-ID: <<18ddda18b898eec8.25324116f72a35c7.f50e409d57f83552@mail.dura.muchiround.com>>
+Subject: Failed to deliver message
+Date: Mon, 12 Oct 2026 18:00:26 +0000
+MIME-Version: 1.0
+Content-Type: multipart/report; report-type="delivery-status"; 
+	boundary="18ddda18b8992384_3a31711cb3e2baea_91d05bbb943a7a8"
+
+
+--18ddda18b8992384_3a31711cb3e2baea_91d05bbb943a7a8
+Content-Type: text/plain; charset="utf-8"
+Content-Transfer-Encoding: quoted-printable
+
+Your message could not be delivered to the following recipients:
+
+<nobody-d6de97419e86@outlook.com> (host 'outlook-com.olc.protection.outlook.=
+com' rejected command 'RCPT TO:<nobody-d6de97419e86@outlook.com> NOTIFY=3DDE=
+LAY,FAILURE' with code 550 (5.5.0) 'Requested action not taken: mailbox unav=
+ailable (S2017062302). [SJ1PEPF000023CF.namprd02.prod.outlook.com 2026-10-12=
+T18:00:26.206Z 08DF2571D4D14CFA]')
+
+
+--18ddda18b8992384_3a31711cb3e2baea_91d05bbb943a7a8
+Content-Type: message/delivery-status; charset="utf-8"
+Content-Transfer-Encoding: quoted-printable
+
+Reporting-MTA: dns;mail.dura.muchiround.com
+Arrival-Date: Mon, 12 Oct 2026 18:00:24 +0000
+
+Final-Recipient: rfc822;nobody-d6de97419e86@outlook.com
+Action: failed
+Status: 5.5.0
+Diagnostic-Code: smtp;550 Requested action not taken: mailbox unavailable (S=
+2017062302). [SJ1PEPF000023CF.namprd02.prod.outlook.com 2026-10-12T18:00:26.=
+206Z 08DF2571D4D14CFA]
+Remote-MTA: dns;outlook-com.olc.protection.outlook.com
+
+
+--18ddda18b8992384_3a31711cb3e2baea_91d05bbb943a7a8
+Content-Type: message/rfc822; charset="utf-8"
+Content-Transfer-Encoding: quoted-printable
+
+DKIM-Signature: v=3D1; a=3Ded25519-sha256; s=3Dv1-ed25519-20261007; d=3Dmuch=
+iround.com; c=3Drelaxed/relaxed; r=3Dy;
+	h=3DMessage-ID:Subject:To:From:Date; t=3D1791828024; bh=3DHjrTOXjeGP80INdlj=
+hjDJ2u
+	RHu6JtazYa3jmBEsfivY=3D; b=3DNXG63B9Fpn+jhmFCB4rpCB+gtDpr7RSTHFBqQi340FzvJD=
+tXha
+	iemnPbfuuUBwPBafWe/YF27XaPaJzMxCPiBw=3D=3D;
+DKIM-Signature: v=3D1; a=3Drsa-sha256; s=3Dv1-rsa-20261007; d=3Dmuchiround.c=
+om; c=3Drelaxed/relaxed; r=3Dy;
+	h=3DMessage-ID:Subject:To:From:Date; t=3D1791828024; bh=3DHjrTOXjeGP80INdlj=
+hjDJ2u
+	RHu6JtazYa3jmBEsfivY=3D; b=3DoVahLvht6nPFyRKCV9ITHrFmlMnGG+hoEbuYKEmQ8xyPTx=
+yW5z
+	IhD7vPYpJec7ZAaoaj4AXRbseSM7a/ZuMUwFSx3tKPGD6KjSBzcuMFifkhh060bzC9l6Wvfgy4c=
+
+	d17LXPhqa5j/FooK8FSuuUm2nqxwipQO0c0DTrghab5AJSk5rG9xqqh2BZ6+a1aaFfrFwuOv4QI=
+
+	HxXN0HhHpElsYuG3a1EHOyAQL/NAsWD3whrN+N8yu0CnTGKGt0CMdJJhb/knS08dxzSI0DUmbkd=
+
+	ixQZ/3EA0r0sa6wOFl9TdZYWamoF782+FY7VV/e53POoEUUP9aYDOKGhescp35zQHTQ=3D=3D;
+From: Muchiround Dispatch <dispatch@muchiround.com>
+To: nobody-d6de97419e86@outlook.com
+Subject: DSN capture (bounce handling test)
+Message-ID: <179182802404.2379833.14059718782561435594@muchiround.com>
+X-Mailcheap-Message-Id: 64f1a2b3c4d5e6f7a8b9c0d1
+Content-Type: text/plain; charset=3D"utf-8"
+Content-Transfer-Encoding: 7bit
+MIME-Version: 1.0
+
+
+--18ddda18b8992384_3a31711cb3e2baea_91d05bbb943a7a8--

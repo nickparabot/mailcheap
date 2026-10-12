@@ -1,0 +1,90 @@
+Delivered-To: dispatch@muchiround.com
+X-Spam-Status: No
+DKIM-Signature: v=1; a=ed25519-sha256; s=v1-ed25519-20261005; d=dura.muchiround.com; c=relaxed/relaxed; r=y;
+	h=Date:Subject:Message-ID:To:From; t=1791828024; bh=06E8OteZOKLY3eSR0a/m2tD
+	Hm52YonGCZgtwctc8+4E=; b=0sIEBasfew0Va2Ay2ctRu8AxNfbb+i8EqmcnQbRHZ0QOaZVRlj
+	NlSDWeKBfOBsxR+/2Gjut3YhLzWZQhJaZiCA==;
+DKIM-Signature: v=1; a=rsa-sha256; s=v1-rsa-20261005; d=dura.muchiround.com; c=relaxed/relaxed; r=y;
+	h=Date:Subject:Message-ID:To:From; t=1791828024; bh=06E8OteZOKLY3eSR0a/m2tD
+	Hm52YonGCZgtwctc8+4E=; b=UWPeo7HPEbexECusnynjPUSSbA33wHdfPz1CJtFI7X7A0RFGW5
+	IwXyyz6iQKt4k7snhacJ9eUbnlvbjHy/QQlWtra2k1UZCdAKEUv3+kjthoXvLUh+VqgQ9G+rDTT
+	vTe3swUopUvOZKgpZIAKB816FgvCKi5fg0MzwllTyt58DhXDKvyARQnoNh+3F43ws1CMo72Muzb
+	BmelBPJ5/bRzaw/5yMnf65+azk94fF7KpNxyy1PYe4YSHbA+Yoqvf2/DvUxg2yFGjrDI62wMUK7
+	9BdEZ1w4anaoaDbHHCwFbait2sOXHamxSHlFhiOz5+M4bE2A2knl/zmk/VLgl/7kR/w==;
+From: "Mail Delivery Subsystem" <MAILER-DAEMON@dura.muchiround.com>
+To: dispatch@muchiround.com
+Auto-Submitted: auto-generated
+Message-ID: <<18ddda18300f522e.2f03c06edc672699.7df8df2096c9ed65@mail.dura.muchiround.com>>
+Subject: Failed to deliver message
+Date: Mon, 12 Oct 2026 18:00:24 +0000
+MIME-Version: 1.0
+Content-Type: multipart/report; report-type="delivery-status"; 
+	boundary="18ddda18300f8032_4cf72d519cd21566_cd8fb6774c95eb3d"
+
+
+--18ddda18300f8032_4cf72d519cd21566_cd8fb6774c95eb3d
+Content-Type: text/plain; charset="utf-8"
+Content-Transfer-Encoding: quoted-printable
+
+Your message could not be delivered to the following recipients:
+
+<nobody-e32c2aeab1ca@gmail.com> (host 'gmail-smtp-in.l.google.com' rejected =
+command 'RCPT TO:<nobody-e32c2aeab1ca@gmail.com>' with code 550 (5.1.1) 'The=
+ email account that you tried to reach does not exist. Please trydouble-chec=
+king the recipient's email address for typos orunnecessary spaces. For more =
+information, go to https://support.google.com/mail/?p=3DNoSuchUser 2adb3069b=
+0e04-5bcddef6a43si8035925e87.220 - gsmtp')
+
+
+--18ddda18300f8032_4cf72d519cd21566_cd8fb6774c95eb3d
+Content-Type: message/delivery-status; charset="utf-8"
+Content-Transfer-Encoding: quoted-printable
+
+Reporting-MTA: dns;mail.dura.muchiround.com
+Arrival-Date: Mon, 12 Oct 2026 18:00:24 +0000
+
+Final-Recipient: rfc822;nobody-e32c2aeab1ca@gmail.com
+Action: failed
+Status: 5.1.1
+Diagnostic-Code: smtp;550 The email account that you tried to reach does not=
+ exist. Please trydouble-checking the recipient's email address for typos or=
+unnecessary spaces. For more information, go to https://support.google.com/m=
+ail/?p=3DNoSuchUser 2adb3069b0e04-5bcddef6a43si8035925e87.220 - gsmtp
+Remote-MTA: dns;gmail-smtp-in.l.google.com
+
+
+--18ddda18300f8032_4cf72d519cd21566_cd8fb6774c95eb3d
+Content-Type: message/rfc822; charset="utf-8"
+Content-Transfer-Encoding: quoted-printable
+
+DKIM-Signature: v=3D1; a=3Ded25519-sha256; s=3Dv1-ed25519-20261007; d=3Dmuch=
+iround.com; c=3Drelaxed/relaxed; r=3Dy;
+	h=3DMessage-ID:Subject:To:From:Date; t=3D1791828024; bh=3DHjrTOXjeGP80INdlj=
+hjDJ2u
+	RHu6JtazYa3jmBEsfivY=3D; b=3DPDmO+5u5EGjidUPnhknv2W87X0eKiyqa0Z4mpTKl0HGyaM=
+rkDR
+	HRNq34awwnkGhigzWUX7YYCBCma2oVqzN2Ag=3D=3D;
+DKIM-Signature: v=3D1; a=3Drsa-sha256; s=3Dv1-rsa-20261007; d=3Dmuchiround.c=
+om; c=3Drelaxed/relaxed; r=3Dy;
+	h=3DMessage-ID:Subject:To:From:Date; t=3D1791828024; bh=3DHjrTOXjeGP80INdlj=
+hjDJ2u
+	RHu6JtazYa3jmBEsfivY=3D; b=3DV6Jc/4w8M10hzUx/N8EdpXf1I+snx9zaNH2s/StXBORfD6=
++6/0
+	m19A5rKdmhNJbCASsYUd0+9REPWce74f6QyYP/aXehtDLLZmdztO48363FURcukF604R5x9r9Oa=
+
+	zD6i+2SdGaG62iDRJ5cNWAuEQxXUt1xPy+MirJC/btZSwgg+czMcW05PSsq2d9LbgEUyQ0tEUmX=
+
+	pppFH5BQtf1WMgs4X5bZJXGtshplRG3KbaVgwIsVUn67+4ZfDlsV1ihGyIZWj3pkCE9t0oZOQBP=
+
+	saVN4aXEKQ0zpqhbbeHdBAhRIy6fYmid5cGPMwTiJQ96mY+quvnHY1YxPdbhe3v/dBg=3D=3D;
+From: Muchiround Dispatch <dispatch@muchiround.com>
+To: nobody-e32c2aeab1ca@gmail.com
+Subject: DSN capture (bounce handling test)
+Message-ID: <179182802403.2379833.2217712005079569014@muchiround.com>
+X-Mailcheap-Message-Id: 64f1a2b3c4d5e6f7a8b9c0d1
+Content-Type: text/plain; charset=3D"utf-8"
+Content-Transfer-Encoding: 7bit
+MIME-Version: 1.0
+
+
+--18ddda18300f8032_4cf72d519cd21566_cd8fb6774c95eb3d--

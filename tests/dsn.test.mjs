@@ -1,7 +1,13 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
-import { classifyDsnRecipient, getDsnBounceEvent, normalizeMessageId, parseDsn } from "../lib/dsn.js";
+import {
+	classifyDsnRecipient,
+	getDsnBounceEvent,
+	isDsnHeaderMatchTrusted,
+	normalizeMessageId,
+	parseDsn,
+} from "../lib/dsn.js";
 import { getBounceMailboxConfig } from "../lib/job-rules.js";
 import { getSesEventPlan } from "../lib/ses-event-mapping.js";
 
@@ -102,7 +108,6 @@ test("classification: address problems are hard, message and sender problems sof
 	const failed = (status, diagnosticCode = "") => classifyDsnRecipient({ action: "failed", status, diagnosticCode });
 	assert.equal(failed("5.1.1").kind, "hard");
 	assert.equal(failed("5.2.1", "550 5.2.1 The email account that you tried to reach is disabled").kind, "hard");
-	assert.equal(failed("5.4.4", "Unable to route: no MX or A record").kind, "hard");
 	assert.equal(failed("5.0.0", "550 Requested action not taken: mailbox unavailable").kind, "hard");
 	assert.equal(failed("5.7.1", "550 5.7.1 <x@example.com>: Recipient address rejected: User unknown").kind, "hard");
 	assert.equal(failed(null, "550 No such user here").kind, "hard");
@@ -115,6 +120,10 @@ test("classification: address problems are hard, message and sender problems sof
 	assert.equal(failed("5.3.4", "552 Message size exceeds fixed limit").subType, "MessageTooLarge");
 	assert.equal(failed("5.6.0", "Content rejected").kind, "soft");
 	assert.equal(failed(null, "Connection timed out").kind, "soft");
+	// No route and bare 5.0.0 can be our own resolver or network: never a mass suppression.
+	assert.equal(failed("5.4.4", "Unable to route: no MX or A record").kind, "soft");
+	assert.equal(failed("5.4.1", "No answer from host").kind, "soft");
+	assert.equal(failed("5.0.0", "").kind, "soft");
 
 	assert.equal(classifyDsnRecipient({ action: "delivered", status: "2.0.0" }), null);
 	assert.equal(classifyDsnRecipient({ action: "relayed", status: "2.0.0" }), null);
@@ -194,4 +203,88 @@ test("the bounce mailbox is on with BOUNCE_IMAP_HOST and reuses the SMTP login",
 	);
 	// Its own user never borrows the SMTP password.
 	assert.equal(getBounceMailboxConfig({ ...smtp, BOUNCE_IMAP_HOST: "x", BOUNCE_IMAP_USER: "other@example.com" }), null);
+});
+
+// A forged DSN: only the X-Mailcheap-Message-Id of a neighbour's message (its _id is guessable from the
+// sender's own pixel URL), no Message-ID, and a Final-Recipient that isn't the neighbour's address.
+function forgedDsn({ mailcheapId, messageId = null, finalRecipient = "whoever@example.com", to = null }) {
+	const returned = [
+		messageId ? `Message-ID: <${messageId}>` : null,
+		to ? `To: ${to}` : null,
+		`X-Mailcheap-Message-Id: ${mailcheapId}`,
+		"Subject: Hello",
+	]
+		.filter(Boolean)
+		.join("\r\n");
+	return [
+		"From: MAILER-DAEMON@attacker.example",
+		"To: dispatch@muchiround.com",
+		"Subject: Undelivered Mail Returned to Sender",
+		'Content-Type: multipart/report; report-type=delivery-status; boundary="b"',
+		"",
+		"--b",
+		"Content-Type: text/plain",
+		"",
+		"Your message could not be delivered.",
+		"--b",
+		"Content-Type: message/delivery-status",
+		"",
+		"Reporting-MTA: dns; mx.attacker.example",
+		"",
+		`Final-Recipient: rfc822; ${finalRecipient}`,
+		"Action: failed",
+		"Status: 5.1.1",
+		"Diagnostic-Code: smtp; 550 5.1.1 No such user",
+		"",
+		"--b",
+		"Content-Type: text/rfc822-headers",
+		"",
+		returned,
+		"",
+		"--b--",
+		"",
+	].join("\r\n");
+}
+
+test("a forged DSN naming a neighbour's _id without its Message-ID is not trusted", () => {
+	const neighbour = { ...message, email: "neighbour@example.com" };
+	const dsn = parseDsn(forgedDsn({ mailcheapId: neighbour._id }));
+	assert.equal(dsn.originalMessageId, null);
+	assert.equal(dsn.mailcheapMessageId, neighbour._id);
+	// The DSN alone would suppress the neighbour, which is why the match has to be checked.
+	assert.equal(getDsnBounceEvent({ dsn, message: neighbour }).bounce.bounceType, "Permanent");
+
+	// Sent (Message-ID saved): the DSN must return that Message-ID.
+	assert.equal(isDsnHeaderMatchTrusted({ dsn, message: neighbour }), false);
+	const wrongId = parseDsn(forgedDsn({ mailcheapId: neighbour._id, messageId: "guess@muchiround.com" }));
+	assert.equal(isDsnHeaderMatchTrusted({ dsn: wrongId, message: neighbour }), false);
+	// Not saved yet: a recipient address the neighbour wasn't sent to doesn't do either.
+	const unsaved = { ...neighbour, sesMessageId: null };
+	assert.equal(isDsnHeaderMatchTrusted({ dsn, message: unsaved }), false);
+	assert.equal(isDsnHeaderMatchTrusted({ dsn, message: null }), false);
+});
+
+test("a header-only DSN that beats the Message-ID save counts when it names the address sent to", () => {
+	const unsaved = { ...message, sesMessageId: undefined };
+	const byFinal = parseDsn(forgedDsn({ mailcheapId: message._id, finalRecipient: "Reader@Example.com" }));
+	assert.equal(isDsnHeaderMatchTrusted({ dsn: byFinal, message: unsaved }), true);
+	// Forwarded: Final-Recipient is the forwarding target, the returned To is the reader.
+	const byTo = parseDsn(
+		forgedDsn({ mailcheapId: message._id, finalRecipient: "inbox@forward.example", to: "Reader <reader@example.com>" })
+	);
+	assert.equal(isDsnHeaderMatchTrusted({ dsn: byTo, message: unsaved }), true);
+	// Its Message-ID, when present, is enough once saved.
+	const withId = parseDsn(forgedDsn({ mailcheapId: message._id, messageId: normalizeMessageId(message.sesMessageId) }));
+	assert.equal(isDsnHeaderMatchTrusted({ dsn: withId, message }), true);
+});
+
+test("the real Stalwart captures carry their Message-ID, so the header match holds for them", () => {
+	for (const name of ["stalwart-gmail-no-such-user.eml", "stalwart-outlook-mailbox-unavailable.eml"]) {
+		const dsn = parseDsn(fixture(name));
+		assert.ok(dsn.originalMessageId, name);
+		assert.ok(dsn.mailcheapMessageId, name);
+		const sent = { _id: dsn.mailcheapMessageId, email: "x@example.com", sesMessageId: `<${dsn.originalMessageId}>` };
+		assert.equal(isDsnHeaderMatchTrusted({ dsn, message: sent }), true, name);
+		assert.equal(isDsnHeaderMatchTrusted({ dsn, message: { ...sent, sesMessageId: "<other@muchiround.com>" } }), false);
+	}
 });

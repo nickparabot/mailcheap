@@ -161,6 +161,37 @@ QStash calls `APP_URL/api/jobs/...` to send each batch, so the app has to be rea
 - **Shared rate limits:** create a Redis database in the [Upstash console](https://console.upstash.com/redis) and add `UPSTASH_REDIS_REST_URL` and `UPSTASH_REDIS_REST_TOKEN`.
 - **Alerts:** set `ALERT_FROM` (like `Mailcheap <alerts@mail.example.com>`) to get alerts by email at `ADMIN_EMAIL`: spam complaints, paused sends, signup floods and rate limiter outages, plus every login, new API key and send. Otherwise they only show in the logs.
 
+## Docker
+
+Mailcheap runs on any server with Docker instead of Vercel. The [`Dockerfile`](Dockerfile) builds a standalone Next.js server that runs as a non-root user, and [`docker-compose.yml`](docker-compose.yml) runs it next to its own MongoDB. SES and QStash stay the same, so follow steps 3 to 5 above for them.
+
+1. Create a `.env` file next to `docker-compose.yml`:
+
+   ```
+   APP_URL=https://mailcheap.example.com
+   ADMIN_EMAIL=you@example.com
+   # 12+ characters
+   ADMIN_PASSWORD=
+   # openssl rand -base64 48
+   SESSION_SECRET=
+   # openssl rand -hex 24 (letters and digits only: it goes into the MongoDB URL)
+   MONGO_PASSWORD=
+   ```
+
+2. Run `docker compose up -d`. The app listens on port 3000 inside the Compose network and publishes no port, so put a reverse proxy with HTTPS in front of it (Caddy, Traefik, nginx). QStash and SNS must reach `APP_URL` over HTTPS. The proxy must set `X-Forwarded-For`, which the rate limits read.
+
+3. `GET /api/health` answers `200` once the server is up. The image and the Compose file both use it as their health check.
+
+**Coolify:** create a resource from your fork with the **Docker Compose** build pack. Coolify lists every variable from `docker-compose.yml` in the Environment Variables tab: fill in the required ones there. Then give the `app` service its domain with the port, like `https://mailcheap.example.com:3000`, and deploy. Coolify's proxy handles HTTPS. The MongoDB data lives in the `mongo-data` volume: add a backup for it.
+
+**No QStash needed (this fork):** the Compose file sets `JOB_QUEUE=local`. Campaign batches and scheduled sends then go into a `jobs` collection in MongoDB, and the server works through them itself every few seconds, one batch at a time at `SEND_RATE_PER_SECOND`. Failed jobs are retried with backoff (6 attempts), and a job left running by a server that died runs again after 10 minutes. Scheduled sends have no 7-day limit. Skip step 4 of the setup. Keep QStash on Vercel, where nothing runs between requests.
+
+**Image uploads without Vercel (this fork):** set `S3_ENDPOINT`, `S3_BUCKET`, `S3_ACCESS_KEY_ID` and `S3_SECRET_ACCESS_KEY` (plus `S3_REGION` if your provider checks it) to store editor uploads in any S3-compatible bucket: Garage, MinIO, R2, AWS. The bucket stays private. The app serves each picture at `APP_URL/media/images/...` with a one-year cache, so links in sent emails live on your domain.
+
+**SMTP instead of SES (this fork):** set `SMTP_HOST`, `SMTP_PORT` (587 by default, STARTTLS required), `SMTP_USER`, `SMTP_PASSWORD` and `SMTP_DOMAINS` (the domains you send from, comma-separated), and every email goes through that server instead: Stalwart, Postfix, or a provider's SMTP. `SMTP_SECURE=true` is for port 465. `SMTP_TLS_VERIFY=false` is only for an internal relay whose certificate can't match its Docker hostname. The SMTP server does DKIM and SPF. What you lose: SES events. Bounces and complaints aren't recorded, so the suppression list and the auto-pause at 2% bounces / 0.08% complaints don't work. Watch the server's bounce reports and Google Postmaster Tools.
+
+**Your own MongoDB (Atlas or elsewhere):** remove the `mongo` service and `depends_on` from `docker-compose.yml` and set `MONGODB_URI` directly. Or skip Compose: `docker build -t mailcheap .` then `docker run -p 3000:3000 --env-file .env mailcheap`, with `MONGODB_URI` in the `.env` file.
+
 ## Local development
 
 ```bash

@@ -53,6 +53,13 @@ services:
       SMTP_PASSWORD: ${SMTP_PASSWORD:-}
       SMTP_TLS_VERIFY: ${SMTP_TLS_VERIFY:-true}
       SMTP_DOMAINS: ${SMTP_DOMAINS:-}
+      SMTP_RETURN_PATH: ${SMTP_RETURN_PATH:-}
+      # Reads bounce reports (DSNs) from the Return-Path's mailbox. See README "Bounces over SMTP".
+      BOUNCE_IMAP_HOST: ${BOUNCE_IMAP_HOST:-}
+      BOUNCE_IMAP_PORT: ${BOUNCE_IMAP_PORT:-993}
+      BOUNCE_IMAP_USER: ${BOUNCE_IMAP_USER:-}
+      BOUNCE_IMAP_PASSWORD: ${BOUNCE_IMAP_PASSWORD:-}
+      BOUNCE_IMAP_TLS_VERIFY: ${BOUNCE_IMAP_TLS_VERIFY:-}
     expose:
       - "3000"
     healthcheck:

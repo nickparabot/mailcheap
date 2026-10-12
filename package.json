@@ -31,6 +31,7 @@
     "@vercel/blob": "^2.8.0",
     "class-variance-authority": "^0.7.1",
     "cn": "^0.4.0",
+    "imapflow": "^2.4.0",
     "jose": "^6.2.12",
     "lucide-react": "^1.52.0",
     "marked": "^18.0.14",

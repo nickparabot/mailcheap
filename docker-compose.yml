@@ -14,6 +14,9 @@ services:
       args:
         APP_URL: ${APP_URL:?Set APP_URL, the public URL of this app}
         IMAGES_CDN_URL: ${IMAGES_CDN_URL:-}
+        EMAIL_PROVIDER: ${EMAIL_PROVIDER:-smtp}
+        SHARED_DOMAIN: ${SHARED_DOMAIN:-}
+        ARCHIVE_CNAME_TARGET: ${ARCHIVE_CNAME_TARGET:-}
     restart: unless-stopped
     depends_on:
       mongo:

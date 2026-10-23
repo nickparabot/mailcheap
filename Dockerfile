@@ -12,17 +12,23 @@ RUN npm ci --no-audit --no-fund
 
 FROM node:${NODE_VERSION}-alpine AS build
 WORKDIR /app
-# The public pages, the search index and next.config read these while building, so they're set for the build too.
-# Leave MAILCHEAP_CLOUD unset for a self-hosted server. No secret is needed: instrumentation.js checks the config when
-# the server starts.
+# The public pages, the search index and next.config read these while building, so they're set for the build too: the
+# help center is prerendered with the server's email provider, shared domain and website host. Leave MAILCHEAP_CLOUD
+# unset for a self-hosted server. No secret is needed: instrumentation.js checks the config when the server starts.
 ARG APP_URL=http://localhost:3000
 ARG MAILCHEAP_CLOUD=
 ARG IMAGES_CDN_URL=
+ARG EMAIL_PROVIDER=
+ARG SHARED_DOMAIN=
+ARG ARCHIVE_CNAME_TARGET=
 ENV NEXT_TELEMETRY_DISABLED=1 \
 	NEXT_OUTPUT=standalone \
 	APP_URL=${APP_URL} \
 	MAILCHEAP_CLOUD=${MAILCHEAP_CLOUD} \
-	IMAGES_CDN_URL=${IMAGES_CDN_URL}
+	IMAGES_CDN_URL=${IMAGES_CDN_URL} \
+	EMAIL_PROVIDER=${EMAIL_PROVIDER} \
+	SHARED_DOMAIN=${SHARED_DOMAIN} \
+	ARCHIVE_CNAME_TARGET=${ARCHIVE_CNAME_TARGET}
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 RUN npm run build

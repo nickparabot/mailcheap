@@ -74,7 +74,7 @@ With your own sending account, you pay your provider for the emails you send: 10
 
 [![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2Fmarclou%2Fmailcheap&project-name=mailcheap&repository-name=mailcheap&env=MONGODB_URI,BETTER_AUTH_SECRET,SUPPRESSION_HASH_KEY,ADMIN_EMAILS,EMAIL_FROM&envDescription=Database%2C%20a%20signing%20secret%20and%20a%20hash%20key%20%2832%2B%20characters%20each%3A%20openssl%20rand%20-base64%2048%29%2C%20your%20email%20to%20sign%20in%20with%2C%20and%20the%20from%20address%20of%20sign-in%20codes.%20Add%20RESEND_API_KEY%2C%20or%20set%20up%20SES%20or%20PostShiba%2C%20so%20the%20codes%20can%20reach%20you.&envLink=https%3A%2F%2Fgithub.com%2Fmarclou%2Fmailcheap%23environment-variables)
 
-Plan for about an hour, most of it waiting for DNS and for your provider to approve production sending. Self-hosting comes without support: issues are off and setup questions go unanswered.
+Plan for about an hour, most of it waiting for DNS and for your provider to approve production sending. On a server of your own, with your own mail relay, [Docker](#docker-an-smtp-relay-and-your-own-server) replaces Vercel, QStash and the email provider. Self-hosting comes without support: issues are off and setup questions go unanswered.
 
 ### What you need
 
@@ -105,6 +105,7 @@ Without Redis, MailCheap counts the same rate limits in each server instance's m
 | `SENDING_ENABLED` | Nothing goes to readers unless it's `true`. Sign-in codes and alerts don't wait for it |
 | `SES_*` or `POSTSHIBA_*` | The email provider, in step 4 |
 | `QSTASH_*` | Background sending and scheduling, in step 5 |
+| `EMAIL_PROVIDER=smtp`, `SMTP_*`, `BOUNCE_IMAP_*`, `JOB_QUEUE`, `IMAGES_S3_ENDPOINT` | Sending through your own SMTP relay, jobs without QStash and S3-compatible images, in [Docker, an SMTP relay and your own server](#docker-an-smtp-relay-and-your-own-server) |
 
 [`.env.example`](.env.example) lists every variable with what it does, the optional ones included: Google sign-in and Postmaster Tools, image uploads, Redis, Telegram alerts, the shared domain, and MailCheap Cloud's own.
 
@@ -247,6 +248,41 @@ QStash calls `APP_URL/api/jobs/...` to send each batch, so the app has to be rea
 - **Alerts on Telegram.** Every admin alert is an email to `ADMIN_EMAILS`. The ones that need someone (an automatic account block, the email provider refusing MailCheap's sends or holding a tenant, Gmail's spam rate for the domain reaching 0.1% or Postmaster Tools refusing the connection, sign-in codes, Stripe events, webhooks or background jobs failing, QStash refusing jobs, shared addresses and the DNS helper) can reach Telegram too: create a bot with [@BotFather](https://t.me/BotFather), send it a message, and set `TELEGRAM_BOT_TOKEN` and the chat's id as `TELEGRAM_CHAT_ID`. Each alert goes there at most once every 6 hours. On PostShiba, have a scheduler call `/api/cron/hourly` every hour with `Authorization: Bearer <CRON_SECRET>` (Vercel Cron sends it once `CRON_SECRET` is set): it checks the team's status (a suspension, the approval, clusters at their cap, held tenants) and alerts on what stops sending. Its first run with Telegram set up posts "Telegram alerts are on".
 - **Shared domain.** `SHARED_DOMAIN` is how MailCheap Cloud gives every newsletter without a domain of its own an address, `hello@<slug>.SHARED_DOMAIN`, and its website at `<slug>.SHARED_DOMAIN`. MailCheap adds each subdomain at the provider and has its records published, and removed when the slug changes, by a DNS helper (`DNS_BROKER_URL`, `DNS_BROKER_SECRET`): on MailCheap Cloud a Vercel project of its own that holds the Vercel token, so the app never does, and only writes a shared address's records and puts website domains on the app's project. The helper isn't part of this repository, and without one DNS automation is off and shared addresses can't be set up. Its DNS has to be on Vercel, with `*.SHARED_DOMAIN` on the project. Add one DMARC record for the whole domain yourself: `_dmarc.SHARED_DOMAIN` TXT `v=DMARC1; p=none;`. It can be the app's own domain, as MailCheap Cloud's is `mailcheap.ai`: slugs can't take `www` or the other names in `lib/reserved-slugs.js`, and those hosts never open a website.
 - **Websites on your own domains.** Set `ARCHIVE_CNAME_TARGET` to the host your server answers on (`cname.vercel-dns.com` on Vercel), and each newsletter's Website settings offer a subdomain of your own, like `news.example.com`. Add that subdomain to your Vercel project (or your web server) first, then add it in MailCheap with the TXT record it shows: once its CNAME and the TXT record are found, the website and the links in the newsletter's next emails move there.
+
+### Docker, an SMTP relay and your own server
+
+Instead of Vercel, QStash, SES and S3, MailCheap can run as one Docker container on a server of your own, next to MongoDB, sending through an SMTP relay you already run (Stalwart, Postfix, Mailcow...) and keeping images in any S3-compatible bucket (Garage, MinIO, R2). Each part below works on its own too: a Node.js server with `JOB_QUEUE=local` and SES, say.
+
+**Start it.** [`docker-compose.yml`](docker-compose.yml) runs the app and MongoDB. Put a `.env` file next to it with at least:
+
+```bash
+APP_URL=https://news.example.com
+MONGO_PASSWORD=          # openssl rand -hex 24
+BETTER_AUTH_SECRET=      # openssl rand -base64 48
+SUPPRESSION_HASH_KEY=    # openssl rand -base64 48, another value
+ADMIN_EMAILS=you@example.com
+EMAIL_FROM=MailCheap <login@mail.example.com>
+SMTP_HOST=mail.example.com
+SMTP_USER=mailcheap@example.com
+SMTP_PASSWORD=
+SMTP_DOMAINS=mail.example.com
+```
+
+Then `docker compose up -d --build`. The app listens on port 3000 inside the compose network and publishes nothing: put a reverse proxy with HTTPS in front (Caddy, Traefik, Coolify's), or add `ports: ["127.0.0.1:3000:3000"]` under `app` to try it locally. The container checks `/api/health` every 30 seconds, and the server log says what's missing when it refuses to start. `APP_URL` and `IMAGES_CDN_URL` are read while the image builds too (the docs, the search index and the image host), so compose passes them as build arguments: rebuild after changing either. Without compose, `docker build --build-arg APP_URL=https://news.example.com -t mailcheap .` builds the same image, which runs as the `node` user.
+
+**Email through SMTP.** `EMAIL_PROVIDER=smtp` sends every email, issues, tests, sign-in codes and alerts, through the relay at `SMTP_HOST`. It's never picked unless you set it. Port 587 upgrades with STARTTLS before it logs in; port 465 needs `SMTP_SECURE=true`. `SMTP_DOMAINS` lists the domains the relay signs (DKIM) for you: newsletters can send from those and their subdomains, which the Domains page shows as ready, with their records set up at your relay. MailCheap can't check them, so test a send with [mail-tester.com](https://www.mail-tester.com) first. `EMAIL_FROM` needs a domain the relay signs too, and `SHARED_DOMAIN`, if you set it, has to be in the list. `SEND_RATE_PER_SECOND` is what your relay takes (14 by default). There are no tenants: MailCheap's own account blocks are the only pause.
+
+**Bounces and complaints.** An SMTP relay has no webhook, so MailCheap reads them by IMAP. Set `SMTP_RETURN_PATH` to an address whose mailbox gets the bounce reports, and `BOUNCE_IMAP_HOST` to that mailbox's server: every 5 minutes MailCheap reads new reports in `BOUNCE_IMAP_MAILBOXES` (`INBOX,Junk Mail` by default), matches each to the email it's about, and marks the contact bounced (a hard bounce, or an address that doesn't exist) or as having complained (a spam report), as SES's events do. It logs in as `BOUNCE_IMAP_USER` and `BOUNCE_IMAP_PASSWORD`, or as `SMTP_USER` without them. Reports it read are tagged in the mailbox and never read twice. Without `BOUNCE_IMAP_HOST`, nothing marks bounces: your bounce rate isn't watched.
+
+**Jobs without QStash.** `JOB_QUEUE=local` (compose's default) keeps background jobs (sending batches, scheduled sends, imports, account purges, summary emails) in MongoDB, and the server runs them itself every few seconds, with the same delays, retries and alerts as on QStash, one job at a time per account. It runs the hourly, 6-hourly and daily checks and the bounce fetch too, so no scheduler and no `CRON_SECRET` are needed. `JOB_CONCURRENCY` is how many jobs a server runs at once (4 by default). It needs a server that runs all the time: on Vercel, keep QStash. Several containers on the same database share the work safely.
+
+**Images in Garage, MinIO or R2.** Set `IMAGES_S3_BUCKET`, `IMAGES_S3_ACCESS_KEY_ID`, `IMAGES_S3_SECRET_ACCESS_KEY`, `IMAGES_S3_ENDPOINT` (the bucket's S3 API, like `http://garage:3900`) and `IMAGES_S3_REGION` (Garage's `s3_region`, often `garage`). Path-style URLs are on with an endpoint; `IMAGES_S3_FORCE_PATH_STYLE=false` turns them off. To keep the bucket private, set `IMAGES_CDN_URL` to `<APP_URL>/media`: the app serves the images it uploaded there, and nothing else in the bucket. A public bucket or a CDN in front of it works too, with its https URL. On Garage, for example:
+
+```bash
+garage bucket create mailcheap-images
+garage key create mailcheap
+garage bucket allow --read --write mailcheap-images --key mailcheap
+```
 
 ### Sending well
 

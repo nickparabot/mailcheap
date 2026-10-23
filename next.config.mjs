@@ -47,6 +47,9 @@ const SITE_EXTENSIONS = Object.entries({
 
 /** @type {import('next').NextConfig} */
 const nextConfig = {
+	// The Dockerfile builds a standalone server (NEXT_OUTPUT=standalone): a small self-contained one, without
+	// node_modules. Vercel and `npm start` keep the default.
+	output: process.env.NEXT_OUTPUT === "standalone" ? "standalone" : undefined,
 	poweredByHeader: false,
 	turbopack: { resolveAlias: Object.fromEntries(SITE_EXTENSIONS) },
 	// Read from disk by its route, so the build can't see it's needed.

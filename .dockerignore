@@ -1,0 +1,17 @@
+.git
+.github
+.next
+.vercel
+.worktrees
+node_modules
+coverage
+docs
+tests
+tmp
+npm-debug.log*
+.DS_Store
+.env*
+!.env.example
+Dockerfile
+docker-compose*.yml
+compose*.yml

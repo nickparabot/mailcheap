@@ -1,0 +1,91 @@
+# MailCheap and MongoDB with Docker Compose, on any server (or Coolify's Docker Compose build pack): no QStash, no
+# scheduler, email through your own SMTP relay. See the README's Docker section.
+#
+# Variables written ${NAME:?...} are required: set them in a .env file next to this one. The others are optional, and
+# .env.example says what each one does.
+#
+# No port is published: put a reverse proxy with HTTPS in front. To try it on your machine, add
+# ports: ["127.0.0.1:3000:3000"] under app.
+
+services:
+  app:
+    build:
+      context: .
+      args:
+        APP_URL: ${APP_URL:?Set APP_URL, the public URL of this app}
+        IMAGES_CDN_URL: ${IMAGES_CDN_URL:-}
+    restart: unless-stopped
+    depends_on:
+      mongo:
+        condition: service_healthy
+    environment:
+      MONGODB_URI: mongodb://mailcheap:${MONGO_PASSWORD:?Set MONGO_PASSWORD (openssl rand -hex 24)}@mongo:27017/mailcheap?authSource=admin
+      BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET:?Set BETTER_AUTH_SECRET (openssl rand -base64 48)}
+      SUPPRESSION_HASH_KEY: ${SUPPRESSION_HASH_KEY:?Set SUPPRESSION_HASH_KEY (openssl rand -base64 48)}
+      APP_URL: ${APP_URL}
+      ADMIN_EMAILS: ${ADMIN_EMAILS:?Set ADMIN_EMAILS, who signs in and runs the admin page}
+      ALLOWED_EMAILS: ${ALLOWED_EMAILS:-}
+      EMAIL_FROM: ${EMAIL_FROM:?Set EMAIL_FROM, the sender of sign-in codes and alerts}
+      SENDING_ENABLED: ${SENDING_ENABLED:-false}
+      SEND_RATE_PER_SECOND: ${SEND_RATE_PER_SECOND:-}
+      # Jobs (sends, schedules, imports, purges) and the hourly, 6-hourly and daily checks run inside the app, from
+      # MongoDB. Unset it and set the QSTASH_* variables to use QStash instead.
+      JOB_QUEUE: ${JOB_QUEUE:-local}
+      JOB_CONCURRENCY: ${JOB_CONCURRENCY:-}
+      # Email through an SMTP relay (Stalwart, Postfix...). SMTP_DOMAINS: the domains it signs (DKIM) for you.
+      EMAIL_PROVIDER: ${EMAIL_PROVIDER:-smtp}
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_SECURE: ${SMTP_SECURE:-false}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      SMTP_TLS_VERIFY: ${SMTP_TLS_VERIFY:-true}
+      SMTP_DOMAINS: ${SMTP_DOMAINS:-}
+      SMTP_RETURN_PATH: ${SMTP_RETURN_PATH:-}
+      SHARED_DOMAIN: ${SHARED_DOMAIN:-}
+      # Bounce and spam reports, read every 5 minutes from the Return-Path's mailbox.
+      BOUNCE_IMAP_HOST: ${BOUNCE_IMAP_HOST:-}
+      BOUNCE_IMAP_PORT: ${BOUNCE_IMAP_PORT:-993}
+      BOUNCE_IMAP_USER: ${BOUNCE_IMAP_USER:-}
+      BOUNCE_IMAP_PASSWORD: ${BOUNCE_IMAP_PASSWORD:-}
+      BOUNCE_IMAP_TLS_VERIFY: ${BOUNCE_IMAP_TLS_VERIFY:-}
+      BOUNCE_IMAP_MAILBOXES: ${BOUNCE_IMAP_MAILBOXES:-}
+      # Image uploads in any S3-compatible bucket (Garage, MinIO, R2). With IMAGES_CDN_URL=<APP_URL>/media the bucket
+      # stays private and the app serves the images.
+      IMAGES_S3_BUCKET: ${IMAGES_S3_BUCKET:-}
+      IMAGES_S3_ENDPOINT: ${IMAGES_S3_ENDPOINT:-}
+      IMAGES_S3_REGION: ${IMAGES_S3_REGION:-}
+      IMAGES_S3_FORCE_PATH_STYLE: ${IMAGES_S3_FORCE_PATH_STYLE:-}
+      IMAGES_S3_ACCESS_KEY_ID: ${IMAGES_S3_ACCESS_KEY_ID:-}
+      IMAGES_S3_SECRET_ACCESS_KEY: ${IMAGES_S3_SECRET_ACCESS_KEY:-}
+      IMAGES_CDN_URL: ${IMAGES_CDN_URL:-}
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID:-}
+      UPSTASH_REDIS_REST_URL: ${UPSTASH_REDIS_REST_URL:-}
+      UPSTASH_REDIS_REST_TOKEN: ${UPSTASH_REDIS_REST_TOKEN:-}
+    expose:
+      - "3000"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/api/health').then((r) => process.exit(r.ok ? 0 : 1), () => process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      start_period: 30s
+      retries: 3
+
+  mongo:
+    image: mongo:8
+    restart: unless-stopped
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: mailcheap
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_PASSWORD:?Set MONGO_PASSWORD (openssl rand -hex 24)}
+    volumes:
+      - mongo-data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      interval: 10s
+      timeout: 5s
+      start_period: 20s
+      retries: 5
+
+volumes:
+  mongo-data:

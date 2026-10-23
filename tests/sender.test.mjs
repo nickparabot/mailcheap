@@ -90,6 +90,21 @@ test("customers can't claim MailCheap's domains", () => {
 	for (const domain of ["example", "-bad.com", "a..b.com", "exa mple.com"]) assert.match(getDomainProblem(domain, options), /Enter a domain/, domain);
 });
 
+test("a self-hosted server sends from the domain its dashboard is a subdomain of; the cloud never lets a customer claim it", () => {
+	const selfHosted = { sharedDomain: null, appHost: "news.example.com", cloud: false };
+	assert.equal(getDomainProblem("example.com", selfHosted), null);
+	assert.equal(getDomainProblem("mail.example.com", selfHosted), null);
+	for (const domain of ["news.example.com", "x.news.example.com", "mailcheap.ai", "amazonses.com"]) {
+		assert.match(getDomainProblem(domain, selfHosted), /can't be added/, domain);
+	}
+	const cloud = { ...selfHosted, cloud: true };
+	assert.match(getDomainProblem("example.com", cloud), /can't be added/);
+	assert.match(getDomainProblem("news.example.com", cloud), /can't be added/);
+	assert.equal(getDomainProblem("mail.example.com", cloud), null);
+	// A shared domain keeps its parents reserved even self-hosted: only the app's host gets the exception.
+	assert.match(getDomainProblem("example.org", { sharedDomain: "news.example.org", appHost: "app.example.net", cloud: false }), /can't be added/);
+});
+
 test("with the app's own domain shared, <slug>.mailcheap.ai is the shared address and the rest of mailcheap.ai stays MailCheap's", () => {
 	const sharedDomain = "mailcheap.ai";
 	const options = { sharedDomain, appHost: "mailcheap.ai" };

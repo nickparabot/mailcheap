@@ -1,9 +1,10 @@
 import { CircleAlert, Link2Off, MailCheck, MailX } from "lucide-react";
+import StyleTheme from "@/components/StyleTheme";
 import { Button } from "@/components/ui/button";
 import { connectDb } from "@/lib/db";
+import { findNewsletterAnywhere } from "@/lib/public-newsletters";
 import { verifyUnsubscribeToken } from "@/lib/unsubscribe";
 import Contact from "@/models/Contact";
-import Newsletter from "@/models/Newsletter";
 
 // The URL carries the unsubscribe token: keep it out of search results and referrer headers.
 export const metadata = {
@@ -25,11 +26,12 @@ export default async function UnsubscribePage({ searchParams }) {
 
 	return (
 		<main className="flex min-h-dvh items-center justify-center bg-background px-4 py-16">
+			<StyleTheme theme={subscription?.theme} />
 			<div className="w-full max-w-sm rounded-xl bg-card p-6 text-center shadow-border sm:p-8">
 				<div className="mx-auto flex size-10 items-center justify-center rounded-full bg-muted text-muted-foreground">
 					<Icon className="size-5" aria-hidden="true" />
 				</div>
-				<h1 className="mt-4 text-lg font-semibold tracking-tight text-balance">{title}</h1>
+				<h1 className="mt-4 text-lg font-theme-heading text-balance">{title}</h1>
 				<p className="mt-1.5 text-sm leading-relaxed text-pretty text-muted-foreground">
 					{description}
 				</p>
@@ -50,12 +52,15 @@ export default async function UnsubscribePage({ searchParams }) {
 async function getSubscription({ contactId, newsletterId }) {
 	try {
 		await connectDb();
-		const [newsletter, contact] = await Promise.all([
-			Newsletter.findById(newsletterId).select({ name: 1 }).lean(),
-			Contact.findOne({ _id: contactId, newsletterId }).select({ status: 1 }).lean(),
-		]);
+		const newsletter = await findNewsletterAnywhere({ _id: newsletterId });
+		const contact =
+			newsletter &&
+			(await Contact.findOne({ accountId: newsletter.accountId, _id: contactId, newsletterId })
+				.select({ status: 1 })
+				.lean());
 		return {
 			newsletterName: newsletter?.name,
+			theme: newsletter?.theme,
 			isSubscribed: !contact || SUBSCRIBED_STATUSES.includes(contact.status),
 		};
 	} catch (error) {

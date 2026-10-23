@@ -17,7 +17,8 @@ import { cn } from "@/lib/utils";
 
 const SCHEDULED_FORMAT = { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" };
 
-export default function TableCampaigns({ campaigns, newsletters, hasActions = false, pageUrls = {} }) {
+// One newsletter's campaigns: their thumbnails fall back to its logo.
+export default function TableCampaigns({ campaigns, newsletter, hasActions = false, pageUrls = {} }) {
 	return (
 		<div className="overflow-hidden rounded-xl shadow-border">
 			<Table>
@@ -42,27 +43,21 @@ export default function TableCampaigns({ campaigns, newsletters, hasActions = fa
 						const { stats } = campaign;
 						const reached = stats.delivered || stats.sent;
 						const date = campaign.sentAt || campaign.startedAt;
-						const newsletter = newsletters[campaign.newsletterId.toString()];
 						return (
 							<TableRow key={id} className="relative">
 								<TableCell className="w-full max-w-0 py-3 pl-4 sm:w-1/2">
 									<div className="flex min-w-0 items-center gap-3.5">
-										<ThumbnailCampaign campaign={campaign} newsletter={newsletter} />
-										<div className="min-w-0">
-											<Link
-												href={`/campaigns/${id}`}
-												className="block truncate font-medium after:absolute after:inset-0"
-											>
-												{campaign.subject || "Untitled"}
-											</Link>
-											<span className="block truncate text-xs text-muted-foreground">
-												{newsletter?.name}
-											</span>
-										</div>
+										<ThumbnailCampaign campaign={campaign} newsletter={newsletter} hasBadge={false} />
+										<Link
+											href={`/campaigns/${id}`}
+											className="min-w-0 truncate font-medium after:absolute after:inset-0"
+										>
+											{campaign.subject || "Untitled"}
+										</Link>
 									</div>
 								</TableCell>
 								<TableCell>
-									<BadgeStatus status={campaign.status} />
+									<BadgeStatus status={campaign.status} label={isPublishedOnWebOnly(campaign) ? "Published" : null} />
 								</TableCell>
 								<TableCell className="hidden text-right tabular-nums md:table-cell">
 									{stats.recipients ? formatNumber(stats.recipients) : <TextEmpty />}
@@ -95,6 +90,7 @@ export default function TableCampaigns({ campaigns, newsletters, hasActions = fa
 											subject={campaign.subject}
 											scheduledAt={campaign.scheduledAt?.toISOString() ?? null}
 											pageUrl={pageUrls[id] ?? null}
+											isWebOnly={campaign.publishTo === "web"}
 										/>
 									</TableCell>
 								)}
@@ -105,4 +101,9 @@ export default function TableCampaigns({ campaigns, newsletters, hasActions = fa
 			</Table>
 		</div>
 	);
+}
+
+// Web-only issues went on the website without an email (lib/publish-to.js).
+function isPublishedOnWebOnly(campaign) {
+	return campaign.publishTo === "web" && campaign.status === "sent";
 }

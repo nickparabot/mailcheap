@@ -1,95 +1,164 @@
 import { isValidObjectId } from "mongoose";
+import { cookies } from "next/headers";
 import { notFound } from "next/navigation";
 import CampaignReport from "@/components/CampaignReport";
 import FormCampaign from "@/components/FormCampaign";
+import { scoped } from "@/lib/account-scope";
+import { getAccountSendProblem, hasActiveSubscription, isBlocked } from "@/lib/account-state";
 import { getArchiveUrls } from "@/lib/archive-hosts";
-import { sendTimesPipeline } from "@/lib/campaign-queries";
-import { isSendingEnabled } from "@/lib/config";
-import { connectDb } from "@/lib/db";
-import { MESSAGE_STATS_GROUP } from "@/lib/message-stats";
+import { findCampaignLinks } from "@/lib/campaign-links";
+import { getCampaignActivity, getCampaignComparison } from "@/lib/campaign-report";
+import { countNewContacts, countRemainingContacts, getSendVolumes, sendTimesPipeline } from "@/lib/campaign-queries";
+import { getSharedDomain, isSendingEnabled } from "@/lib/config";
+import { getFieldOptions } from "@/lib/contact-fields";
+import { isContentReviewEnabled } from "@/lib/content-review";
+import { getPostalAddress } from "@/lib/postal-address";
+import { countAudience, countSegmentCards, findCampaignSegmentFilter, listLiveSegments } from "@/lib/segment-queries";
+import { compileSegment, describeSegment } from "@/lib/segments";
+import { getSelectedNewsletter, openNewsletter } from "@/lib/selected-newsletter";
+import { getPace } from "@/lib/send-spread";
 import { serialize } from "@/lib/serialize";
-import { listSesDomains } from "@/lib/ses";
+import { findAccountDomains, loadSender } from "@/lib/sender";
+import { getOwnDomainNudge, isOnSharedDomain, isOwnDomainNudgeShown } from "@/lib/sender-rules";
+import { getSenderVolumes } from "@/lib/sender-warmup";
+import { siteExtensions } from "@/lib/site-extensions";
+import { TIME_ZONE_COOKIE, resolveTimeZone } from "@/lib/time-zone";
+import { countEmailsInFlight, getUsage } from "@/lib/usage";
 import Campaign from "@/models/Campaign";
-import Contact from "@/models/Contact";
-import Message from "@/models/Message";
 import Newsletter from "@/models/Newsletter";
 
 export const metadata = { title: "Campaign" };
 
 export default async function CampaignPage({ params }) {
-	const { id } = await params;
+	const [{ id }, view] = await Promise.all([params, getSelectedNewsletter()]);
+	const { user, account } = view;
 	if (!isValidObjectId(id)) notFound();
 
-	await connectDb();
-	const campaign = await Campaign.findById(id).lean();
+	const campaign = await Campaign.findOne(scoped(account, { _id: id })).lean();
 	if (!campaign) notFound();
-	const newsletter = await Newsletter.findById(campaign.newsletterId).lean();
-	if (!newsletter) notFound();
+	openNewsletter(view, campaign.newsletterId, `/campaigns/${id}`);
+	const stored = await Newsletter.findOne(scoped(account, { _id: campaign.newsletterId })).lean();
+	if (!stored) notFound();
+	// The previews and the checks show the address its emails print.
+	const newsletter = { ...stored, postalAddress: getPostalAddress(stored, siteExtensions.defaultPostalAddress) };
+	const plan = await getPlanState(account);
 
 	if (!["draft", "scheduled"].includes(campaign.status)) {
-		const [providers, remainingCount] = await Promise.all([
-			getProviderBreakdown(campaign._id),
-			countRemaining(campaign),
+		const [{ providers, timeline }, comparison, remainingCount, links, cookieStore] = await Promise.all([
+			getCampaignActivity(campaign),
+			getCampaignComparison(campaign),
+			countRemainingContacts(campaign),
+			findCampaignLinks(campaign),
+			cookies(),
 		]);
+		// Only a next step needs them, for what its dialog says.
+		const [volumes, newContacts, senderVolumes] =
+			remainingCount > 0
+				? await Promise.all([
+						getSendVolumes(account),
+						countNewContacts(account, newsletter._id, await findCampaignSegmentFilter(campaign)),
+						loadSenderVolumes(account, newsletter),
+					])
+				: [];
 		return (
 			<CampaignReport
 				campaign={serialize(campaign)}
 				newsletter={serialize(newsletter)}
+				contactFields={getFieldOptions(account)}
 				providers={providers}
+				links={serialize(links)}
+				timeline={timeline}
+				comparison={comparison}
+				timeZone={resolveTimeZone(cookieStore.get(TIME_ZONE_COOKIE)?.value)}
 				remainingCount={remainingCount}
+				emailsLeft={plan.emailsLeft}
+				isBlocked={isBlocked(account)}
+				pace={getPace(account, { ...volumes, sender: senderVolumes })}
+				newContacts={newContacts}
 			/>
 		);
 	}
 
-	const [audienceCount, domains, sendTimes] = await Promise.all([
-		Contact.countDocuments({ newsletterId: newsletter._id, status: "active" }),
-		listSesDomains(),
+	// A draft whose segment was deleted goes to nobody until it gets another one.
+	const segments = await listLiveSegments(account, newsletter._id);
+	const segment = campaign.segmentId ? segments.find(({ _id }) => _id.equals(campaign.segmentId)) : null;
+	const isSegmentDeleted = Boolean(campaign.segmentId && !segment);
+	const [audience, everyone, sender, sendTimes, volumes, domains] = await Promise.all([
+		isSegmentDeleted ? { contacts: 0, neverMailed: 0 } : countAudience(account, newsletter._id, segment && compileSegment(segment)),
+		campaign.segmentId ? countSegmentCards(account, newsletter._id, []) : null,
+		loadSender(account, newsletter),
 		getSendTimes(campaign),
+		getSendVolumes(account),
+		findAccountDomains(account._id),
 	]);
-	const fromDomain = newsletter.fromEmail.split("@")[1];
-	const isDomainVerified =
-		Array.isArray(domains) && domains.some(({ domain, verified }) => domain === fromDomain && verified);
+	const senderVolumes = sender.identity ? await getSenderVolumes(account, newsletter, sender.identity) : null;
+	const sharedDomain = getSharedDomain();
+	const domainNudge = getOwnDomainNudge({ fromEmail: newsletter.fromEmail, domains, sharedDomain });
+	// Without a plan there's no shared address yet, and adding a domain waits for one.
+	const isDomainNudgeShown = hasActiveSubscription(account) && isOwnDomainNudgeShown(domainNudge, newsletter);
 
 	return (
 		<FormCampaign
 			campaign={serialize(campaign)}
 			newsletter={serialize(newsletter)}
-			audienceCount={audienceCount}
-			isDomainVerified={isDomainVerified}
+			audienceCount={audience.contacts}
+			everyoneCount={everyone?.everyone ?? audience.contacts}
+			segments={segments.map(({ _id, name, match, conditions }) => ({
+				id: String(_id),
+				name,
+				description: describeSegment({ match, conditions }, account.contactFields ?? []),
+			}))}
+			contactFields={getFieldOptions(account)}
+			isSegmentDeleted={isSegmentDeleted}
+			senderProblem={sender.problem ?? null}
+			isSharedSender={isOnSharedDomain(newsletter.fromEmail, sharedDomain)}
+			domainNudge={isDomainNudgeShown ? domainNudge : null}
 			isSendingEnabled={isSendingEnabled()}
-			testEmail={process.env.ADMIN_EMAIL}
+			testEmail={user.email}
 			sendTimes={sendTimes}
 			archiveUrlBase={newsletter.archiveEnabled ? getArchiveUrls(newsletter).absolutePost("") : null}
+			planProblem={plan.problem}
+			emailsLeft={plan.emailsLeft}
+			pace={getPace(account, { ...volumes, sender: senderVolumes })}
+			newContacts={audience.neverMailed}
+			isTipsEnabled={isContentReviewEnabled()}
 		/>
 	);
 }
 
-// A newsletter's first issue borrows the times the other newsletters go out.
+// What the send dialogs need: emails left after the sends already going out (null: no limit), and what
+// blocks any send. Without a plan, the send buttons open the paywall instead.
+async function getPlanState(account) {
+	if (!hasActiveSubscription(account)) return { emailsLeft: null, problem: null };
+	const [usage, inFlight] = await Promise.all([getUsage(account), countEmailsInFlight(account._id)]);
+	const accountProblem = getAccountSendProblem(account)?.message ?? null;
+	if (usage.emailsLimit === null) return { emailsLeft: null, problem: accountProblem };
+	const emailsLeft = Math.max(0, usage.emailsLimit - usage.emailsSent - inFlight);
+	const problem =
+		accountProblem ??
+		(usage.subscribers > usage.subscribersLimit
+			? "Over your plan's subscriber limit"
+			: emailsLeft === 0
+				? "This month's emails are used up"
+				: null);
+	return { emailsLeft, problem };
+}
+
+// Its domain's warm-up, for the next step's dialog: none while the newsletter can't send.
+async function loadSenderVolumes(account, newsletter) {
+	const sender = await loadSender(account, newsletter);
+	return sender.identity ? getSenderVolumes(account, newsletter, sender.identity) : null;
+}
+
+// A newsletter's first issue borrows the times the account's other newsletters go out.
 async function getSendTimes(campaign) {
+	const { accountId } = campaign;
 	const own = await Campaign.aggregate(
-		sendTimesPipeline({ newsletterId: campaign.newsletterId, excludeId: campaign._id })
+		sendTimesPipeline({ accountId, newsletterId: campaign.newsletterId, excludeId: campaign._id })
 	);
-	const rows = own.length > 0 ? own : await Campaign.aggregate(sendTimesPipeline({ excludeId: campaign._id }));
+	const rows = own.length > 0 ? own : await Campaign.aggregate(sendTimesPipeline({ accountId, excludeId: campaign._id }));
 	return {
 		history: rows.map(({ at }) => at.toISOString()),
 		taken: own.filter(({ status }) => status === "scheduled").map(({ at }) => at.toISOString()),
 	};
-}
-
-// Only a send capped to the most engaged has a next step. Close enough for the dialog: contacts who
-// left after receiving it make this a little low, and the send itself skips everyone who has it.
-async function countRemaining(campaign) {
-	if (campaign.status !== "sent" || !campaign.audienceLimit) return 0;
-	const active = await Contact.countDocuments({ newsletterId: campaign.newsletterId, status: "active" });
-	const reached = (campaign.stats?.recipients ?? 0) + (campaign.lastChance?.recipients ?? 0);
-	return Math.max(0, active - reached);
-}
-
-async function getProviderBreakdown(campaignId) {
-	const rows = await Message.aggregate([
-		{ $match: { campaignId, kind: "campaign" } },
-		{ $group: { _id: { $ifNull: ["$provider", "other"] }, ...MESSAGE_STATS_GROUP } },
-		{ $sort: { sent: -1 } },
-	]);
-	return rows.filter(({ sent }) => sent > 0).map(({ _id, ...row }) => ({ provider: _id, ...row }));
 }

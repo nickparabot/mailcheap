@@ -3,19 +3,26 @@
 import { useState } from "react";
 import { EditorContent, useEditor } from "@tiptap/react";
 import FileHandler from "@tiptap/extension-file-handler";
-import Image from "@tiptap/extension-image";
 import { Placeholder } from "@tiptap/extensions";
 import StarterKit from "@tiptap/starter-kit";
-import { toast } from "sonner";
+import DialogImagePicker from "@/components/DialogImagePicker";
 import MenuFormat from "@/components/MenuFormat";
+import MenuImage from "@/components/MenuImage";
 import { SlashCommand } from "@/components/MenuSlash";
+import { BlockHandle } from "@/lib/editor-block-handle";
 import { Callout } from "@/lib/editor-callout";
-import { IMAGE_TYPES, getDisplaySize, prepareImage, uploadImage } from "@/lib/upload-image";
+import { ImageAligned } from "@/lib/editor-image";
+import { MergeTags } from "@/lib/editor-merge-tags";
+import { toast } from "@/lib/toast";
+import { IMAGE_TYPES, IMAGE_TYPE_ERROR, getDisplaySize, prepareImage, uploadImage } from "@/lib/upload-image";
+import { useFileDropGuard } from "@/lib/use-file-drop";
 
 const MIN_HEIGHT = "min-h-[560px]";
 
-export default function EditorRich({ content, onChange }) {
+// contactFields: the account's fields, whose tags the editor draws as placeholders and its slash menu inserts.
+export default function EditorRich({ content, onChange, contactFields = [] }) {
 	const [isEditingLink, setIsEditingLink] = useState(false);
+	const [isPickingImage, setIsPickingImage] = useState(false);
 	const editor = useEditor({
 		immediatelyRender: false,
 		content,
@@ -26,7 +33,7 @@ export default function EditorRich({ content, onChange }) {
 				link: { openOnClick: false, defaultProtocol: "https" },
 				dropcursor: { color: "var(--ring)", width: 2 },
 			}),
-			Image.configure({
+			ImageAligned.configure({
 				resize: {
 					enabled: true,
 					directions: ["left", "right"],
@@ -36,6 +43,8 @@ export default function EditorRich({ content, onChange }) {
 				},
 			}),
 			Callout,
+			BlockHandle,
+			MergeTags.configure({ contactFields }),
 			Placeholder.configure({
 				placeholder: ({ node }) => (node.type.name === "heading" ? "Heading" : "Write, or press / for commands"),
 			}),
@@ -45,42 +54,51 @@ export default function EditorRich({ content, onChange }) {
 				onDrop: (current, files, position) => insertImages(current, files, position),
 				onPaste: (current, files) => insertImages(current, files),
 			}),
-			SlashCommand.configure({ onPickImage: pickImages }),
+			SlashCommand.configure({ onPickImage: () => setIsPickingImage(true), contactFields }),
 		],
 		editorProps: {
-			attributes: { class: `prose-issue ${MIN_HEIGHT} px-5 py-5 outline-none`, "aria-label": "Content" },
+			// With a mouse, the left padding holds the blocks' drag handle (lib/editor-block-handle.js).
+			attributes: { class: `prose-issue ${MIN_HEIGHT} px-5 py-5 outline-none [@media(pointer:fine)]:pl-12`, "aria-label": "Content" },
 			handleKeyDown: (view, event) => {
 				const isLinkShortcut = (event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k";
 				if (!isLinkShortcut || view.state.selection.empty) return false;
 				setIsEditingLink(true);
 				return true;
 			},
+			// The file handler takes pictures and passes on any other file, which would vanish without a word.
+			handleDrop: (_view, event) => {
+				const files = [...(event.dataTransfer?.files ?? [])];
+				if (files.length === 0 || files.some((file) => IMAGE_TYPES.includes(file.type))) return false;
+				event.preventDefault();
+				toast.error(IMAGE_TYPE_ERROR);
+				return true;
+			},
 		},
 		onUpdate: ({ editor: current }) => onChange(current.getHTML()),
 	});
+	useFileDropGuard();
 
 	if (!editor) return <div className={MIN_HEIGHT} />;
 
 	return (
 		<>
-			<EditorContent editor={editor} />
+			<EditorContent editor={editor} className="relative" />
 			<MenuFormat editor={editor} isEditingLink={isEditingLink} onEditLink={setIsEditingLink} />
+			<MenuImage editor={editor} />
+			<DialogImagePicker
+				open={isPickingImage}
+				onOpenChange={setIsPickingImage}
+				onSelect={(image) => insertImage(editor, image)}
+			/>
 		</>
 	);
 }
 
-// Safari only opens pickers for inputs in the document, so this one joins it until a choice is made.
-function pickImages(editor) {
-	const input = Object.assign(document.createElement("input"), {
-		type: "file",
-		accept: IMAGE_TYPES.join(","),
-		multiple: true,
-		hidden: true,
-	});
-	input.addEventListener("change", () => insertImages(editor, [...input.files]));
-	for (const event of ["change", "cancel"]) input.addEventListener(event, () => input.remove());
-	document.body.append(input);
-	input.click();
+// Where the slash command was typed: the editor keeps its selection while the picker has focus.
+function insertImage(editor, { url, width, height }) {
+	if (editor.isDestroyed) return;
+	const size = width && height ? getDisplaySize({ width, height }) : {};
+	editor.chain().focus().insertContent({ type: "image", attrs: { src: url, alt: "", ...size } }).run();
 }
 
 // Each picture shows right away from the local file and switches to its CDN URL once uploaded. The

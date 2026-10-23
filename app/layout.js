@@ -1,6 +1,6 @@
 import { Geist, Geist_Mono } from "next/font/google";
 import ProviderTheme from "@/components/ProviderTheme";
-import { Toaster } from "@/components/ui/sonner";
+import Toaster from "@/components/Toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { APP_NAME } from "@/lib/config";
 import "./globals.css";
@@ -15,13 +15,17 @@ export const metadata = {
 	robots: { index: false, follow: false },
 };
 
+// Where browsers support it (Chrome on Android), the on-screen keyboard shrinks the page instead of covering it, so a
+// dialog's actions stay above the keyboard.
+export const viewport = { interactiveWidget: "resizes-content" };
+
 export default function RootLayout({ children }) {
 	return (
 		<html lang="en" suppressHydrationWarning className={`${geistSans.variable} ${geistMono.variable}`}>
 			<body className="min-h-dvh bg-background text-foreground">
 				<ProviderTheme>
 					<TooltipProvider delayDuration={200}>{children}</TooltipProvider>
-					<Toaster position="bottom-right" />
+					<Toaster />
 				</ProviderTheme>
 			</body>
 		</html>

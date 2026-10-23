@@ -1,9 +1,9 @@
 import { NextResponse } from "next/server";
 import { connectDb } from "@/lib/db";
 import { getClientIp, isRateLimited } from "@/lib/rate-limit";
+import { moveContact } from "@/lib/status-changes";
 import { verifyUnsubscribeToken } from "@/lib/unsubscribe";
 import Campaign from "@/models/Campaign";
-import Contact from "@/models/Contact";
 import Message from "@/models/Message";
 
 const NO_STORE = { "Cache-Control": "no-store" };
@@ -14,37 +14,46 @@ const RECENT_CAMPAIGNS = 5;
 const RATE_LIMIT = { name: "unsubscribe", limit: 60, window: "1 m" };
 
 // Links don't carry the campaign, so the unsubscribe counts for the latest campaign sent to them.
-async function creditLatestCampaign({ contactId, newsletterId }) {
-	const campaigns = await Campaign.find({ newsletterId, startedAt: { $ne: null } })
+async function creditLatestCampaign({ accountId, contactId, newsletterId }) {
+	const campaigns = await Campaign.find({ accountId, newsletterId, startedAt: { $ne: null } })
 		.sort({ startedAt: -1 })
 		.limit(RECENT_CAMPAIGNS)
 		.select({ _id: 1 })
 		.lean();
 	for (const { _id } of campaigns) {
 		const wasSent = await Message.exists({
+			accountId,
 			kind: "campaign",
 			campaignId: _id,
 			contactId,
 			sentAt: { $ne: null },
 		});
 		if (!wasSent) continue;
-		await Campaign.updateOne({ _id }, { $inc: { "stats.unsubscribed": 1 } });
+		await Campaign.updateOne({ accountId, _id }, { $inc: { "stats.unsubscribed": 1 } });
 		return;
 	}
 }
 
-async function unsubscribe({ contactId, newsletterId }) {
+// The token is signed, so the contact it names is found whatever the account. Unsubscribing always works,
+// even for an account that canceled. via: link for the page in the email, mail-app for its unsubscribe button.
+async function unsubscribe({ contactId, newsletterId }, via) {
 	await connectDb();
-	const previous = await Contact.findOneAndUpdate(
-		{ _id: contactId, newsletterId, status: { $in: SUBSCRIBED_STATUSES } },
-		{ $set: { status: "unsubscribed", unsubscribedAt: new Date() } }
-	)
-		.select({ _id: 1 })
-		.lean();
+	const at = new Date();
+	const previous = await moveContact(
+		{ _id: contactId, newsletterId },
+		{
+			from: SUBSCRIBED_STATUSES,
+			to: "unsubscribed",
+			via,
+			at,
+			update: { $set: { unsubscribedAt: at } },
+			options: { crossAccount: true, projection: { _id: 1, accountId: 1 } },
+		}
+	);
 	if (!previous) return;
 
 	console.log(`[unsubscribe] Contact ${contactId} unsubscribed from newsletter ${newsletterId}`);
-	await creditLatestCampaign({ contactId, newsletterId }).catch((error) =>
+	await creditLatestCampaign({ accountId: previous.accountId, contactId, newsletterId }).catch((error) =>
 		console.error("[unsubscribe] Could not credit the campaign:", error.message)
 	);
 }
@@ -84,7 +93,7 @@ export async function POST(request) {
 	if (!reference) return respond(400, "invalid");
 
 	try {
-		await unsubscribe(reference);
+		await unsubscribe(reference, isPageForm ? "link" : "mail-app");
 		return respond(200, "done");
 	} catch (error) {
 		console.error("[unsubscribe] Failed:", error);

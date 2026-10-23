@@ -1,3 +1,5 @@
+import CardSettings from "@/components/CardSettings";
+import HeaderPage from "@/components/HeaderPage";
 import SkeletonCampaigns from "@/components/SkeletonCampaigns";
 import { Skeleton } from "@/components/ui/skeleton";
 import { PERIOD_DAYS } from "@/lib/overview-series";
@@ -8,16 +10,7 @@ import { cn } from "@/lib/utils";
 export default function SkeletonOverview() {
 	return (
 		<>
-			<header className="mb-6 flex items-center justify-between gap-3">
-				<div className="flex items-center gap-1">
-					<div className="flex items-center gap-1 rounded-xl bg-muted/70 p-1">
-						<Skeleton className="h-8 w-36 rounded-lg bg-background shadow-border dark:bg-muted" />
-						<Skeleton className="h-8 w-28 rounded-lg bg-transparent" />
-					</div>
-					<span className="size-9" />
-				</div>
-				<Skeleton className="h-9 w-32 rounded-lg" />
-			</header>
+			<HeaderPage title="Overview" />
 			<div className="flex flex-col gap-8">
 				<SectionSkeleton title={`Last ${PERIOD_DAYS} days`}>
 					<div className="overflow-hidden rounded-2xl bg-card shadow-border">
@@ -32,12 +25,6 @@ export default function SkeletonOverview() {
 				</SectionSkeleton>
 				<SectionSkeleton title="Campaigns">
 					<SkeletonCampaigns rows={5} />
-				</SectionSkeleton>
-				<SectionSkeleton title="Domains">
-					<SkeletonDomainList />
-				</SectionSkeleton>
-				<SectionSkeleton title="System">
-					<SkeletonSesAccount />
 				</SectionSkeleton>
 			</div>
 		</>
@@ -103,27 +90,6 @@ export function SkeletonSends() {
 	);
 }
 
-export function SkeletonDomainList({ rows = 3 }) {
-	return (
-		<ul aria-hidden="true" className="divide-y divide-border/60 overflow-hidden rounded-xl bg-card shadow-border">
-			{Array.from({ length: rows }, (_, index) => (
-				<li key={index} className="flex min-h-16 items-center gap-3 px-4 py-3 lg:min-h-14">
-					<Skeleton className="size-5 shrink-0 rounded-md" />
-					<div className="flex min-w-0 flex-1 flex-col gap-1 lg:flex-row lg:items-center lg:gap-6">
-						<Line height="h-5" className="h-3.5 w-36" />
-						<Line height="h-4 lg:hidden" className="h-3 w-48" />
-					</div>
-					<div className="hidden items-center gap-6 lg:flex">
-						<Skeleton className="h-3 w-16" />
-						<Skeleton className="h-3 w-24" />
-						<Skeleton className="h-3 w-32" />
-					</div>
-				</li>
-			))}
-		</ul>
-	);
-}
-
 export function SkeletonSesAccount() {
 	return (
 		<div aria-hidden="true" className="overflow-hidden rounded-xl bg-card shadow-border">
@@ -139,6 +105,35 @@ export function SkeletonSesAccount() {
 				))}
 			</div>
 		</div>
+	);
+}
+
+// CardSendingCapacity while the email provider answers: its two lanes of two meters.
+export function SkeletonSendingCapacity() {
+	return (
+		<CardSettings
+			title="Sending capacity"
+			action={<span className="text-xs text-muted-foreground">Shared by every account</span>}
+			stagger={1}
+			className="overflow-hidden"
+		>
+			<div aria-hidden="true" className="grid gap-px bg-border/60 sm:grid-cols-2 lg:grid-cols-1">
+				{[24, 36].map((width) => (
+					<div key={width} className="flex flex-col gap-3 bg-card px-4 py-3.5">
+						<Line height="h-6" className="h-3.5" style={{ width: `${width * 4}px` }} />
+						{[0, 1].map((meter) => (
+							<div key={meter} className="flex flex-col gap-1.5">
+								<div className="flex justify-between">
+									<Line height="h-4" className="h-2.5 w-16" />
+									<Line height="h-4" className="h-2.5 w-20" />
+								</div>
+								<Skeleton className="h-1.5 w-full rounded-full" />
+							</div>
+						))}
+					</div>
+				))}
+			</div>
+		</CardSettings>
 	);
 }
 

@@ -24,7 +24,7 @@ function contact(id, fields = {}) {
 	return { _id: id, email: `${id}@example.com`, subscribedAt: daysAgo(400), ...fields };
 }
 
-test("cleanup is off by default, and saved numbers win over the defaults", () => {
+test("a newsletter saved without cleanup has it off, and saved numbers win over the defaults", () => {
 	assert.deepEqual(getCleanupSettings({ slug: "weekly" }), { enabled: false, issues: 6, days: 180 });
 	assert.deepEqual(getCleanupSettings({ slug: "weekly", cleanup: { enabled: true, issues: 8, days: 60 } }), {
 		enabled: true,

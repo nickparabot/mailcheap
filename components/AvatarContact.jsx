@@ -1,6 +1,6 @@
 import Image from "next/image";
 import ImageDomainLogo from "@/components/ImageDomainLogo";
-import { rootDomain } from "@/lib/favicon";
+import { rootDomain } from "@/lib/root-domain";
 
 // Gmail's logo says nothing about the person, so those contacts keep their initial.
 const GMAIL_DOMAINS = new Set(["gmail.com", "googlemail.com"]);
@@ -13,6 +13,7 @@ export default function AvatarContact({ email, gravatarHash, size = 24 }) {
 
 	return (
 		<span
+			aria-hidden="true"
 			style={{
 				width: size,
 				height: size,

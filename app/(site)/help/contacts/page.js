@@ -1,0 +1,278 @@
+import Link from "next/link";
+import ArticleHelp from "@/components/ArticleHelp";
+import LinkApp from "@/components/LinkApp";
+import { TRIAL_CONTACTS } from "@/lib/actions/contacts";
+import { isCloud } from "@/lib/config";
+import { MAX_CONTACT_FIELDS, MAX_TAGS, MAX_TAG_LENGTH } from "@/lib/contact-fields";
+import { LIST_STARTED_AT } from "@/lib/contacts-header";
+import { isSpamListEnabled } from "@/lib/domain-reputation";
+import { getHelpHref, getHelpPageMetadata } from "@/lib/help";
+import { MAX_SEGMENT_CONDITIONS, SEGMENT_PRESETS, describeSegment } from "@/lib/segments";
+
+export const metadata = getHelpPageMetadata("contacts");
+
+export default function ContactsPage() {
+	return (
+		<ArticleHelp slug="contacts">
+			<h2 id="statuses">Statuses</h2>
+			<p>
+				The <LinkApp href="/contacts">Contacts page</LinkApp> lists the open newsletter&apos;s contacts, newest signups first. Filter
+				them by status or by tag, or search by email address. Each one shows their Gravatar photo, or else the logo of their
+				email&apos;s domain, or their initial.
+			</p>
+			<table>
+				<thead>
+					<tr>
+						<th>Status</th>
+						<th>What it means</th>
+					</tr>
+				</thead>
+				<tbody>
+					<tr>
+						<td>Active</td>
+						<td>Gets your issues.{isCloud() && " Counts toward your plan's subscribers."}</td>
+					</tr>
+					<tr>
+						<td>Pending</td>
+						<td>Signed up and hasn&apos;t clicked the confirmation email yet. Gets nothing else until then.</td>
+					</tr>
+					<tr>
+						<td>Dormant</td>
+						<td>
+							Stopped opening and didn&apos;t answer the <Link href={getHelpHref("list-cleanup")}>last-chance email</Link>, was
+							imported as dormant, or you marked them dormant. Gets no issues until you mark them active.
+						</td>
+					</tr>
+					<tr>
+						<td>Unsubscribed</td>
+						<td>
+							Unsubscribed, or you unsubscribed them. Back if they sign up again, or if you resubscribe them because they asked.
+						</td>
+					</tr>
+					<tr>
+						<td>Bounced</td>
+						<td>Their address can&apos;t receive email. Never emailed again.</td>
+					</tr>
+					<tr>
+						<td>Complained</td>
+						<td>Marked one of your emails as spam. Never emailed again.</td>
+					</tr>
+				</tbody>
+			</table>
+
+			<h2 id="contact-page">Each contact&apos;s page</h2>
+			<p>
+				Click a contact on the <LinkApp href="/contacts">Contacts page</LinkApp> to open their page. At the top: their picture, name
+				and address, their status, their country, their inbox and when they subscribed. Below, how many of your emails they got and
+				the share they opened and clicked, then their activity, newest first: every email they got, when they opened it, the links
+				they clicked, and when they signed up, confirmed or changed status. On the side are their first name, fields and tags, where
+				they came from, the segments they&apos;re in and your other newsletters they&apos;re on.
+			</p>
+			<p>
+				Change their status from the badge under their name. Edit details changes their first name, fields and tags, and the trash
+				button deletes them. Click an issue to open its report, a tag to list everyone who has it, and a segment to list its contacts.
+			</p>
+			<p>
+				Their activity keeps every change of their status, each with what made it: the unsubscribe link in your email or their mail
+				app&apos;s button, a bounce or a spam complaint, the list cleanup or their answer to its last-chance email, signing up again,
+				confirming, an import, or you. So someone who unsubscribed and came back shows both, in order. Before October 21, 2026, only
+				the changes made by hand or through the API were kept: when one of those reveals an earlier change, that change shows dated
+				before it.
+			</p>
+			<p>
+				Their country comes from where they signed up or confirmed, or for someone who joined another way, like an import, where
+				they first clicked a link in your emails. MailCheap reads it from their connection, then keeps the country only, never the
+				address. Opens never give one, since inboxes load images through their own servers.
+				{!isCloud() && " On a self-hosted server, countries need Vercel, which names each visitor's country."}
+			</p>
+			<p>
+				Their picture is the one they set on Gravatar, if they did. Otherwise it shows their initial, over their company&apos;s logo
+				when their address is on its domain. Google doesn&apos;t share Gmail pictures with other apps.
+			</p>
+
+			<h2 id="details">First names, tags and fields</h2>
+			<p>
+				Besides an email address, each contact can have a first name, tags and values for your own fields. Click Edit details on
+				their page, or in their menu on the <LinkApp href="/contacts">Contacts page</LinkApp>, to change them.
+			</p>
+			<ul>
+				<li>
+					<strong>First name</strong>: what <code>{"{{first_name}}"}</code> shows in your emails.{" "}
+					<Link href={getHelpHref("writing", "first-name")}>Names and fields in your emails</Link>
+				</li>
+				<li>
+					<strong>Tags</strong>: labels a contact has or doesn&apos;t, like vip, podcast or customer, {MAX_TAGS} per contact at most.
+					Use them to sort people into groups: list everyone with a tag, or send to them through a segment. Tags are lowercase, up
+					to {MAX_TAG_LENGTH} characters, without commas. Tag lists everyone the page shows with its filters, or takes a tag off
+					them. Tags never show in emails.
+				</li>
+				<li>
+					<strong>Fields</strong>: your own questions with an answer for each contact, like a last name, a birthday or a plan, as
+					text, a number or a date, {MAX_CONTACT_FIELDS} at most, shared by your newsletters. Each one&apos;s tag shows the
+					reader&apos;s answer in your emails.{" "}
+					<a href="#fields">Adding fields, step by step</a>
+				</li>
+			</ul>
+			<p>
+				When the answer is yes or no, use a tag: is this person a customer? When it&apos;s a value that differs from one person to the
+				next, use a field: which company do they work at? Segments can pick contacts by both.
+			</p>
+			<p>
+				When someone signs up again, their first name and fields only fill in what&apos;s missing, and new tags are added to theirs.
+			</p>
+
+			<h2 id="fields">Adding fields, step by step</h2>
+			<p>
+				Fields keep what you know about each reader besides their address: a last name, a birthday, a favorite color, the plan
+				they&apos;re on. Every contact already has a first name and tags, so those need no field.
+			</p>
+			<ol>
+				<li>
+					<strong>Make your fields.</strong> Click Fields at the top of the <LinkApp href="/contacts">Contacts page</LinkApp>.
+					Before your list has contacts, and on a phone, it&apos;s Contact fields in the <strong>⋯</strong> menu there. Type a
+					name, like Birthday, pick its type (text, a number or a date) and click the plus. Its key, like <code>birthday</code>, is
+					what imports, segments and the API call it. An import can make fields for you too, as below.
+				</li>
+				<li>
+					<strong>Fill them in</strong>, whichever way suits you:
+					<ul>
+						<li>
+							<strong>By hand</strong>: open a contact&apos;s page, or their menu at the end of their row, click Edit details, and
+							type their first name and a value for each field. A date field opens a calendar: pick the month and year at its top,
+							then the day, and the cross at its end clears it.
+						</li>
+						<li>
+							<strong>From a CSV file</strong>: import it from the <LinkApp href="/contacts">Contacts page</LinkApp>. Each column
+							shows where it goes: First name, one of your fields, or a new field the import makes from the column.{" "}
+							<Link href={getHelpHref("importing-contacts", "check")}>Check before you import</Link>
+						</li>
+						<li>
+							<strong>From your signup form</strong>: turn on First name in{" "}
+							<LinkApp href="/newsletters/form">Form for your site</LinkApp>, and new readers can type theirs as they sign up. The
+							form asks for nothing else.
+						</li>
+						<li>
+							<strong>From your code or an AI assistant</strong>: <Link href="/docs/api#add-contact">add_contact</Link>,{" "}
+							<Link href="/docs/api#update-contact">update_contact</Link> and{" "}
+							<Link href="/docs/api#import-contacts">import_contacts</Link> take a first name and fields by key, like{" "}
+							<code>{'"fields": { "birthday": "1990-04-12" }'}</code>, with dates as YYYY-MM-DD, and{" "}
+							<Link href="/docs/api#create-contact-field">create_contact_field</Link> makes new fields.{" "}
+							<Link href={getHelpHref("api-and-ai")}>API and AI assistants</Link>
+						</li>
+					</ul>
+				</li>
+				<li>
+					<strong>Use them in your emails.</strong> In an issue, type <kbd>/</kbd> and pick a field under Contact fields, or click the
+					person icon at the end of the subject, to add its tag, like <code>{"{{birthday}}"}</code>. Each reader gets their own
+					value, and a fallback after a bar, like <code>{"{{plan|free}}"}</code>, shows for readers without one. Pick a contact in
+					the preview to see the email with their values. <Link href={getHelpHref("writing", "first-name")}>Names and fields in your emails</Link>
+				</li>
+				<li>
+					<strong>Pick readers by them.</strong> <a href="#segments">Segments</a> pick contacts by their fields, like everyone on the
+					Pro plan.
+				</li>
+			</ol>
+			<p>
+				A value has to fit its field: a number field takes a number, and a date field a day. Clear a value to remove it. Deleting a
+				field hides its values on every contact, and adding it again brings them back.
+			</p>
+
+			<h2 id="segments">Segments</h2>
+			<p>
+				A segment picks some of your contacts with a few conditions, and keeps up to date as they change. The{" "}
+				<LinkApp href="/contacts">Contacts page</LinkApp> shows each one as a card with its count: click it to list its contacts, and
+				the export follows. New segment opens the editor, with a few starting points:
+			</p>
+			<ul>
+				{SEGMENT_PRESETS.map((segment) => (
+					<li key={segment.name}>
+						<strong>{segment.name}</strong>: {describeSegment(segment).toLowerCase()}.
+					</li>
+				))}
+			</ul>
+			<p>
+				Conditions can be on opens and clicks, issues missed in a row, the number of emails opened, the signup date, where they signed
+				up (your website&apos;s signup form, the form on your own site, an import, by hand or the API), the email address, a tag,
+				whether they have a first name, and your own fields, {MAX_SEGMENT_CONDITIONS} at most. A segment matches all of its
+				conditions, or any of them. In the send step, pick one to send an issue to its contacts only.{" "}
+				<Link href={getHelpHref("sending", "who")}>Who gets it</Link>
+			</p>
+			<p>
+				Counts are of active contacts, the ones an issue goes to. Conditions on dates count back from now, so &ldquo;opened in the last
+				30 days&rdquo; follows time, and a send reads its segment when it goes out. A segment that a scheduled or sending issue goes to
+				can&apos;t be deleted until that issue goes elsewhere.
+			</p>
+
+			<h2 id="add">Adding someone by hand</h2>
+			<p>
+				On the <LinkApp href="/contacts">Contacts page</LinkApp>, click Add contact, type their email address and tick that they
+				agreed to get your emails. They join at once, without a confirmation email, and get your welcome email if it&apos;s on.
+				Once your list has {LIST_STARTED_AT} contacts, Add contact is in the <strong>⋯</strong> menu at the top of the page.
+				{isCloud() && ` Without a plan, you can add ${TRIAL_CONTACTS.limit} contacts a day, enough to try it on yourself.`}
+			</p>
+			<p>
+				For a whole list, import a CSV file instead: <Link href={getHelpHref("importing-contacts")}>Importing contacts</Link>.
+			</p>
+
+			<h2 id="actions">Changing a status, and deleting</h2>
+			<p>
+				Each contact&apos;s menu, at the end of their row, has what applies to them, and so do the badge and the buttons at the top of
+				their page:
+			</p>
+			<ul>
+				<li>
+					<strong>Edit details</strong> changes their first name, tags and fields.
+				</li>
+				<li>
+					<strong>Mark as active</strong> brings back a dormant contact: they get your next issue. On a pending contact, it skips
+					the confirmation email, once you confirm they asked for your emails.
+				</li>
+				<li>
+					<strong>Mark as dormant</strong> stops issues to an active contact without unsubscribing them, as the list cleanup does.
+					Mark them active again any time.
+				</li>
+				<li>
+					<strong>Unsubscribe</strong> stops every email to them.
+				</li>
+				<li>
+					<strong>Resubscribe</strong> brings back someone who unsubscribed. Do it only when they asked: MailCheap asks you to
+					confirm it, and keeps who did it and when. Someone who unsubscribed can&apos;t be marked dormant, so they only come back
+					this way or by signing up again.
+				</li>
+				<li>
+					<strong>Delete contact</strong> removes them with their dates and engagement, and can&apos;t be undone. For someone who
+					unsubscribed, bounced or complained, MailCheap keeps a scrambled trace of the address, so adding it again never emails it.
+					Anyone else can be added again like a new contact.
+				</li>
+			</ul>
+			<p>
+				Bounced and complained contacts keep their status: their address can&apos;t receive email, or they marked one of your
+				emails as spam. No email goes out when you change a status. The{" "}
+				<Link href={getHelpHref("api-and-ai")}>API and AI assistants</Link> can change statuses too, with the same rules.
+			</p>
+
+			<h2 id="export">Exporting</h2>
+			<p>
+				Export, in the <strong>⋯</strong> menu at the top of the <LinkApp href="/contacts">Contacts page</LinkApp>, downloads the
+				contacts that match your filters as a CSV file, with their first name, tags and a column per field. Its columns go back in
+				through the import as they are, so it&apos;s also a backup.
+			</p>
+
+			<h2 id="undeliverable">Addresses no one can reach</h2>
+			<p>
+				When an address hard bounces or turns out to be a spam trap, MailCheap remembers it for every sender: imports and signups
+				leave it out, and sends skip it, showing the contact as bounced. A bounced address is remembered for 180 days, a spam trap for
+				good.
+			</p>
+			<p>
+				MailCheap also checks in the background that your contacts&apos; domains can receive email. Contacts on one that can&apos;t show as
+				bounced, marked &ldquo;No mail server&rdquo;, and come back on their own once it can.
+				{(isCloud() || isSpamListEnabled()) &&
+					" Contacts on a known spam domain show as bounced, marked \u201cSpam domain\u201d, unless they ever opened or clicked."}{" "}
+				<Link href={getHelpHref("list-cleanup", "domains")}>
+					{(isCloud() || isSpamListEnabled()) ? "Spam domains and domains without mail" : "Domains that can\u2019t receive email"}
+				</Link>
+			</p>
+		</ArticleHelp>
+	);
+}

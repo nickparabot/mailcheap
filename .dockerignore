@@ -2,10 +2,12 @@
 .github
 .next
 .vercel
+.worktrees
 node_modules
 coverage
 docs
 tests
+tmp
 npm-debug.log*
 .DS_Store
 .env*

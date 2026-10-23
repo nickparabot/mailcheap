@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { getContactWrites, getStatusChanges } from "../lib/contact-import.js";
 
+const accountId = "64f1a2b3c4d5e6f7a8b9c0d1";
 const newsletterId = "74f1a2b3c4d5e6f7a8b9c0d2";
 const subscribedAt = new Date("2026-10-08T09:00:00.000Z");
 
@@ -15,10 +16,10 @@ const contacts = [
 ];
 
 test("rows add the contacts a newsletter doesn't have and only make statuses stricter", () => {
-	const writes = getContactWrites({ newsletterId, contacts, source: "import" });
+	const writes = getContactWrites({ accountId, newsletterId, contacts, source: "import" });
 	assert.equal(writes.length, contacts.length);
 	assert.ok(writes.every(({ updateOne }) => updateOne.upsert === true));
-	assert.deepEqual(writes[0].updateOne.filter, { newsletterId, email: "new@example.com" });
+	assert.deepEqual(writes[0].updateOne.filter, { accountId, newsletterId, email: "new@example.com" });
 	assert.deepEqual(writes[0].updateOne.update, {
 		$setOnInsert: { status: "active", source: "import", subscribedAt },
 		$set: { "imported.openRate": 0.5 },
@@ -33,7 +34,7 @@ test("rows add the contacts a newsletter doesn't have and only make statuses str
 });
 
 test("existing contacts never become active and contacts waiting to confirm stay as they are", () => {
-	const writes = getContactWrites({ newsletterId, contacts, source: "import" });
+	const writes = getContactWrites({ accountId, newsletterId, contacts, source: "import" });
 	for (const { updateOne } of writes) {
 		assert.ok(Object.keys(updateOne.update.$set ?? {}).every((key) => key.startsWith("imported.")));
 	}
@@ -41,4 +42,20 @@ test("existing contacts never become active and contacts waiting to confirm stay
 		assert.notEqual(status, "active");
 		assert.equal(replaces.includes("pending"), false);
 	}
+});
+
+test("opens and clicks from the previous platform only move a contact's own forward", () => {
+	const lastOpenAt = new Date("2026-09-30T08:00:00.000Z");
+	const lastClickAt = new Date("2026-09-12T08:00:00.000Z");
+	const [write] = getContactWrites({
+		accountId,
+		newsletterId,
+		contacts: [{ email: "reader@example.com", status: "active", subscribedAt, emailsReceived: 40, lastOpenAt, lastClickAt, opens: 31, clicks: 6 }],
+		source: "import",
+	});
+	assert.deepEqual(write.updateOne.update.$max, { lastOpenAt, lastClickAt, "stats.opens": 31, "stats.clicks": 6 });
+	assert.deepEqual(write.updateOne.update.$set, { "imported.emailsReceived": 40 });
+
+	const [plain] = getContactWrites({ accountId, newsletterId, contacts: [{ email: "plain@example.com", status: "active" }], source: "import" });
+	assert.equal(plain.updateOne.update.$max, undefined, "rows without engagement don't touch it");
 });

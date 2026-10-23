@@ -9,8 +9,9 @@ export const maxDuration = 300;
 // Each outcome is logged: it's the trace of when and why a scheduled issue went out or didn't.
 async function handleScheduled(request) {
 	const body = await request.json().catch(() => null);
-	const result = await runScheduledSend({ campaignId: body?.campaignId, scheduledAt: body?.scheduledAt });
-	console.info(`[scheduled] ${JSON.stringify({ campaignId: body?.campaignId, scheduledAt: body?.scheduledAt, ...result })}`);
+	const job = { accountId: body?.accountId, campaignId: body?.campaignId, scheduledAt: body?.scheduledAt };
+	const result = await runScheduledSend(job);
+	console.info(`[scheduled] ${JSON.stringify({ ...job, ...result })}`);
 	return NextResponse.json(result);
 }
 

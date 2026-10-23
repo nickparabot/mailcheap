@@ -1,37 +1,26 @@
 "use server";
 
-import { isValidObjectId } from "mongoose";
 import { revalidatePath } from "next/cache";
-import { notifyActivity } from "@/lib/alerts";
-import { generateApiKey } from "@/lib/api-keys";
-import { requireSession } from "@/lib/auth";
-import { getAppUrl } from "@/lib/config";
-import { connectDb } from "@/lib/db";
-import ApiKey from "@/models/ApiKey";
+import { runDashboardAction, toFormError } from "@/lib/actions/dashboard";
 
 export async function createApiKey(_state, formData) {
-	await requireSession();
-	const name = String(formData.get("name") ?? "")
-		.trim()
-		.slice(0, 60);
-	if (!name) return { error: "Name is required" };
-
-	await connectDb();
-	const { key, prefix, hash } = generateApiKey();
-	await ApiKey.create({ name, prefix, hash });
-	await notifyActivity([`API key created: ${name}`, `${getAppUrl()}/api-keys`]);
-
+	const { output, failure } = await runDashboardAction("create_api_key", {
+		name: String(formData.get("name") ?? "").slice(0, 60),
+		level: formData.get("level") === "signups" ? "signups" : "full",
+	});
+	if (failure) return toFormError(failure);
 	revalidatePath("/api-keys");
-	return { key };
+	return { key: output.key, level: output.apiKey.level };
 }
 
 export async function revokeApiKey(id) {
-	await requireSession();
-	if (!isValidObjectId(id)) return { error: "Key not found" };
-
-	await connectDb();
-	await ApiKey.updateOne({ _id: id, revokedAt: null }, { $set: { revokedAt: new Date() } });
-
+	const { failure } = await runDashboardAction("revoke_api_key", { id: String(id) });
 	revalidatePath("/api-keys");
-	return { ok: true };
+	return failure ? toFormError(failure) : { ok: true };
+}
+
+export async function revokeConnectedApp(id) {
+	const { failure } = await runDashboardAction("revoke_connected_app", { id: String(id) });
+	revalidatePath("/api-keys");
+	return failure ? toFormError(failure) : { ok: true };
 }

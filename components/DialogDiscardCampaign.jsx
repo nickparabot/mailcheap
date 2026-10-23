@@ -3,7 +3,6 @@
 import { useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { Loader2 } from "lucide-react";
-import { toast } from "sonner";
 import { discardCampaign } from "@/app/(app)/campaigns/actions";
 import { Button } from "@/components/ui/button";
 import {
@@ -16,6 +15,7 @@ import {
 	DialogTitle,
 } from "@/components/ui/dialog";
 import { formatSendTime } from "@/lib/format";
+import { toast } from "@/lib/toast";
 
 // Opened from a menu, so the caller owns the open state.
 export default function DialogDiscardCampaign({ id, subject, scheduledAt, isOpen, onOpenChange, redirectTo }) {

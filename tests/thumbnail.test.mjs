@@ -11,6 +11,14 @@ test("only local and Blob pictures go through Next's resizer", () => {
 	assert.equal(isOptimizableImage("https://evil.test/x.public.blob.vercel-storage.com/a.png"), false);
 });
 
+test("pictures on the images CDN go through it too, once IMAGES_CDN_URL names it", () => {
+	const env = { IMAGES_CDN_URL: "https://cdn.example.com" };
+	assert.equal(isOptimizableImage("https://cdn.example.com/accounts/a/images/cover-0123456789abcdef.png", env), true);
+	assert.equal(isOptimizableImage("https://cdn.example.com.evil.test/accounts/a.png", env), false);
+	assert.equal(isOptimizableImage("https://images.example.com/accounts/a.png", env), false);
+	assert.equal(isOptimizableImage("https://cdn.example.com/accounts/a.png", {}), false);
+});
+
 test("the first real image of an issue becomes its thumbnail", () => {
 	const html = `
 		<img src="https://cdn.example.com/open-pixel.gif" width="1" height="1">

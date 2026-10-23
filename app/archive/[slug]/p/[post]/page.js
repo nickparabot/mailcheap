@@ -26,7 +26,7 @@ export function generateStaticParams() {
 async function getIssuePage(params) {
 	const { slug, post } = await params;
 	const newsletter = await getArchiveNewsletter(slug);
-	const issue = newsletter && (await getArchiveIssue(newsletter._id.toString(), post));
+	const issue = newsletter && (await getArchiveIssue(newsletter, post));
 	return issue ? { newsletter, issue } : null;
 }
 
@@ -41,8 +41,8 @@ export default async function IssuePage({ params }) {
 	const { newsletter, issue } = page;
 
 	const [more, readers] = await Promise.all([
-		listArchiveIssues(newsletter._id, { limit: 3, excludeId: issue._id }),
-		countReaders(newsletter._id.toString()),
+		listArchiveIssues(newsletter, { limit: 3, excludeId: issue._id }),
+		countReaders(newsletter),
 	]);
 	const urls = getArchiveUrls(newsletter);
 	const body = renderIssueBody(issue);
@@ -61,7 +61,7 @@ export default async function IssuePage({ params }) {
 			<ScriptJsonLd data={getIssueSeo(newsletter, issue).jsonLd} />
 			<article className="mx-auto max-w-2xl px-5 pt-12 sm:pt-16">
 				<header className="animate-enter">
-					<h1 className="text-4xl font-semibold tracking-tight text-balance sm:text-[2.75rem] sm:leading-[1.1]">
+					<h1 className="text-4xl font-theme-heading text-balance sm:text-[2.75rem] sm:leading-[1.1]">
 						{issue.subject}
 					</h1>
 					{issue.previewText && (

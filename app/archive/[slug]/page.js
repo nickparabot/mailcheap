@@ -8,6 +8,7 @@ import { countReaders, getArchiveNewsletter, listArchiveIssues } from "@/lib/arc
 import { getArchiveUrls } from "@/lib/archive-hosts";
 import { getHomeSeo } from "@/lib/archive-seo";
 import { formatNumber } from "@/lib/format";
+import { cn } from "@/lib/utils";
 
 export const revalidate = 3600;
 
@@ -25,8 +26,8 @@ export default async function ArchivePage({ params }) {
 	if (!newsletter) notFound();
 
 	const [issues, readers] = await Promise.all([
-		listArchiveIssues(newsletter._id),
-		countReaders(newsletter._id.toString()),
+		listArchiveIssues(newsletter),
+		countReaders(newsletter),
 	]);
 	const urls = getArchiveUrls(newsletter);
 	const pinned = issues.filter((issue) => issue.archivePinned);
@@ -44,7 +45,7 @@ export default async function ArchivePage({ params }) {
 						size={72}
 						className="rounded-2xl shadow-[0_8px_24px_-8px_rgb(0_0_0/0.25)] animate-enter"
 					/>
-					<h1 style={{ "--stagger": 1 }} className="mt-6 text-4xl font-semibold tracking-tight animate-enter sm:text-5xl">
+					<h1 style={{ "--stagger": 1 }} className="mt-6 text-4xl font-theme-heading animate-enter sm:text-5xl">
 						{newsletter.name}
 					</h1>
 					{newsletter.description && (
@@ -74,7 +75,7 @@ export default async function ArchivePage({ params }) {
 			</section>
 
 			{pinned.length > 0 && (
-				<section style={{ "--stagger": 5 }} className="mx-auto max-w-5xl px-5 animate-enter">
+				<section style={{ "--stagger": 5 }} className={cn("mx-auto max-w-5xl px-5 animate-enter", rest.length === 0 && "pb-24")}>
 					<h2 className="mb-6 text-sm font-medium text-muted-foreground">Featured</h2>
 					<ol className="grid gap-x-8 gap-y-12 sm:grid-cols-2 lg:grid-cols-3">
 						{pinned.map((issue, index) => (
@@ -92,7 +93,7 @@ export default async function ArchivePage({ params }) {
 			)}
 
 			{latest && (
-				<section style={{ "--stagger": 5 }} className="mx-auto max-w-5xl px-5 animate-enter">
+				<section style={{ "--stagger": 5 }} className={cn("mx-auto max-w-5xl px-5 animate-enter", rest.length === 0 && "pb-24")}>
 					<h2 className="mb-4 text-sm font-medium text-muted-foreground">Latest issue</h2>
 					<CardIssue
 						issue={latest}

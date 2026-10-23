@@ -1,17 +1,19 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { test } from "node:test";
 import {
 	classifyDsnRecipient,
-	getDsnBounceEvent,
+	getComplaintEmailEvent,
+	getDsnEmailEvent,
 	isDsnHeaderMatchTrusted,
 	normalizeMessageId,
+	parseComplaint,
 	parseDsn,
 } from "../lib/dsn.js";
-import { getBounceMailboxConfig } from "../lib/job-rules.js";
-import { getSesEventPlan } from "../lib/ses-event-mapping.js";
+import { getEventPlan } from "../lib/email-event-rules.js";
+import { getBounceMailboxConfig } from "../lib/email-provider/smtp-rules.js";
 
-// stalwart-*.eml are real DSNs from our Stalwart 0.16.13 (sends to nonexistent Gmail and Outlook.com
+// stalwart-*.eml are real DSNs from a Stalwart 0.16.13 relay (sends to nonexistent Gmail and Outlook.com
 // mailboxes). The others follow the formats Gmail, Exchange Online, Stalwart and ARF reports use.
 function fixture(name) {
 	return readFileSync(new URL(`./fixtures/dsn/${name}`, import.meta.url));
@@ -19,8 +21,9 @@ function fixture(name) {
 
 const message = {
 	_id: "6a0c3f2e9b1d4c5e6f7a8b9c",
+	accountId: "64f1a2b3c4d5e6f7a8b9c0aa",
 	email: "reader@example.com",
-	sesMessageId: "<2b6c1f0e-7a1d-4c55-9d1e-0f6a2d9c1e01@muchiround.com>",
+	providerMessageId: "<2b6c1f0e-7a1d-4c55-9d1e-0f6a2d9c1e01@muchiround.com>",
 	kind: "campaign",
 };
 
@@ -62,7 +65,7 @@ test("Gmail's own DSN: nested multiparts, folded fields, the returned message", 
 	assert.match(recipient.diagnosticCode, /does not exist/);
 	assert.deepEqual(classifyDsnRecipient(recipient), { kind: "hard", subType: "NoEmail" });
 	// Last-Attempt-Date, when given, is when it bounced.
-	assert.equal(getDsnBounceEvent({ dsn, message }).bounce.timestamp, "2026-10-13T01:00:09.000Z");
+	assert.deepEqual(getDsnEmailEvent({ dsn, message }).occurredAt, new Date("2026-10-13T01:00:09.000Z"));
 });
 
 test("Outlook's NDR: base64 delivery status and text/rfc822-headers", () => {
@@ -87,7 +90,7 @@ test("a delay warning is a DSN but not a failure", () => {
 	assert.equal(dsn.recipients[0].action, "delayed");
 	assert.equal(dsn.recipients[0].status, "4.4.7");
 	assert.equal(classifyDsnRecipient(dsn.recipients[0]), null);
-	assert.equal(getDsnBounceEvent({ dsn, message }), null);
+	assert.equal(getDsnEmailEvent({ dsn, message }), null);
 });
 
 test("blocks and full mailboxes are soft: the message failed, the address is fine", () => {
@@ -100,6 +103,8 @@ test("blocks and full mailboxes are soft: the message failed, the address is fin
 test("spam reports and auto-replies are not DSNs", () => {
 	assert.equal(parseDsn(fixture("arf-complaint.eml")), null);
 	assert.equal(parseDsn(fixture("auto-reply.eml")), null);
+	assert.equal(parseComplaint(fixture("auto-reply.eml")), null);
+	assert.equal(parseComplaint(fixture("stalwart-gmail-no-such-user.eml")), null, "a DSN isn't a complaint");
 	assert.equal(parseDsn(""), null);
 	assert.equal(parseDsn("not an email at all"), null);
 });
@@ -129,34 +134,104 @@ test("classification: address problems are hard, message and sender problems sof
 	assert.equal(classifyDsnRecipient({ action: "relayed", status: "2.0.0" }), null);
 });
 
-test("a hard DSN becomes the SES Bounce event that suppresses the reader and counts toward the pause", () => {
+test("a hard DSN becomes the bounce event that suppresses the reader and counts toward the pause", () => {
 	const dsn = parseDsn(fixture("stalwart-gmail-no-such-user.eml"));
-	const event = getDsnBounceEvent({ dsn, message });
-	assert.equal(event.eventType, "Bounce");
-	assert.equal(event.bounce.bounceType, "Permanent");
-	assert.equal(event.bounce.bouncedRecipients[0].finalRecipient, "nobody-e32c2aeab1ca@gmail.com");
+	const event = getDsnEmailEvent({ dsn, message });
+	assert.equal(event.type, "bounce");
+	assert.equal(event.bounce, "hard");
+	assert.equal(event.undeliverable, true, "5.1.1: the address doesn't exist");
+	assert.equal(event.accountId, message.accountId);
+	assert.equal(event.messageId, message._id);
+	assert.equal(event.providerMessageId, message.providerMessageId);
+	assert.equal(event.providerEventId, `dsn:${message._id}:hard`);
+	assert.equal(event.detail, "dsn/5.1.1");
+	assert.equal(event.data.finalRecipient, "nobody-e32c2aeab1ca@gmail.com");
+	assert.deepEqual(event.occurredAt, new Date("2026-10-12T18:00:24.000Z"));
 
-	const plan = getSesEventPlan(event);
-	assert.equal(plan.type, "Bounce");
-	assert.equal(plan.sesMessageId, message.sesMessageId);
+	const plan = getEventPlan(event);
+	assert.equal(plan.type, "bounce");
+	assert.equal(plan.providerMessageId, message.providerMessageId);
 	assert.equal(plan.messageId, message._id);
-	assert.deepEqual(plan.occurredAt, new Date("2026-10-12T18:00:24.000Z"));
 	assert.deepEqual(plan.firsts, [{ field: "bouncedAt", stat: "bounced" }]);
 	assert.equal(plan.status.to, "bounced");
-	assert.match(plan.error, /^Hard bounce: NoEmail, 550 The email account/);
-	// The address Mailcheap sent to is suppressed, whatever Final-Recipient says.
+	assert.match(plan.error, /^Hard bounce: 550 The email account/);
+	// The address MailCheap sent to is suppressed, whatever Final-Recipient says.
 	assert.deepEqual(plan.suppression.emails, ["reader@example.com"]);
 	assert.equal(plan.suppression.reason, "bounce");
-	assert.equal(plan.suppression.detail, "Permanent/NoEmail");
+	assert.equal(plan.suppression.detail, "dsn/5.1.1");
+	assert.deepEqual(plan.globalSuppression, { emails: ["reader@example.com"], reason: "bounce", detail: "dsn/5.1.1" });
+	assert.equal(plan.isRecorded, true);
+});
+
+test("every fixture becomes the event it stands for, or none", () => {
+	const expected = {
+		"stalwart-gmail-no-such-user.eml": { type: "bounce", bounce: "hard", undeliverable: true, detail: "dsn/5.1.1" },
+		"stalwart-outlook-mailbox-unavailable.eml": { type: "bounce", bounce: "hard", undeliverable: false, detail: "dsn/5.5.0" },
+		"gmail-address-not-found.eml": { type: "bounce", bounce: "hard", undeliverable: true, detail: "dsn/5.1.1" },
+		"outlook-recipient-not-found.eml": { type: "bounce", bounce: "hard", undeliverable: true, detail: "dsn/5.1.10" },
+		"policy-block.eml": { type: "bounce", bounce: "soft", undeliverable: false, detail: "dsn/5.7.1" },
+		"mailbox-full.eml": { type: "bounce", bounce: "soft", undeliverable: false, detail: "dsn/5.2.2" },
+		"delayed.eml": null,
+		"auto-reply.eml": null,
+		"arf-complaint.eml": { type: "complaint", feedback: "abuse", detail: "arf/abuse" },
+	};
+	const fixtures = readdirSync(new URL("./fixtures/dsn/", import.meta.url)).filter((name) => name.endsWith(".eml"));
+	assert.deepEqual(fixtures.toSorted(), Object.keys(expected).toSorted(), "every fixture has its expected event");
+	for (const [name, want] of Object.entries(expected)) {
+		const source = fixture(name);
+		const dsn = parseDsn(source);
+		const complaint = parseComplaint(source);
+		const event = dsn ? getDsnEmailEvent({ dsn, message }) : getComplaintEmailEvent({ complaint, message });
+		if (!want) {
+			assert.equal(event, null, name);
+			continue;
+		}
+		const picked = Object.fromEntries(Object.keys(want).map((key) => [key, event?.[key]]));
+		assert.deepEqual(picked, want, name);
+		assert.deepEqual([event.email, event.emails, event.accountId, event.messageId], [message.email, [message.email], message.accountId, message._id], name);
+		assert.ok(getEventPlan(event), name);
+	}
 });
 
 test("a soft DSN is recorded without suppressing anyone", () => {
 	const dsn = parseDsn(fixture("policy-block.eml"));
-	const plan = getSesEventPlan(getDsnBounceEvent({ dsn, message }));
+	const plan = getEventPlan(getDsnEmailEvent({ dsn, message }));
 	assert.equal(plan.suppression, null);
+	assert.equal(plan.globalSuppression, null);
 	assert.equal(plan.status, null);
 	assert.deepEqual(plan.firsts, []);
-	assert.match(plan.error, /^Soft bounce: ContentRejected, 550 5\.7\.1 Service unavailable/);
+	assert.equal(plan.isRecorded, true);
+	assert.match(plan.error, /^Soft bounce: 550 5\.7\.1 Service unavailable/);
+});
+
+test("a hard bounce that isn't 5.1.x suppresses the address for the account only", () => {
+	const dsn = parseDsn(fixture("stalwart-outlook-mailbox-unavailable.eml"));
+	const plan = getEventPlan(getDsnEmailEvent({ dsn, message }));
+	assert.equal(plan.suppression.reason, "bounce");
+	assert.equal(plan.globalSuppression, null);
+});
+
+test("an ARF spam report becomes a complaint about the email it returns", () => {
+	const complaint = parseComplaint(fixture("arf-complaint.eml"));
+	assert.equal(complaint.feedbackType, "abuse");
+	assert.equal(complaint.userAgent, "Hotmail FBL");
+	assert.equal(complaint.originalMessageId, "2b6c1f0e-7a1d-4c55-9d1e-0f6a2d9c1e01@muchiround.com");
+	assert.equal(complaint.mailcheapMessageId, "6a0c3f2e9b1d4c5e6f7a8b9c");
+	assert.equal(complaint.originalRecipient, "reader@workspace-example.com");
+	assert.deepEqual(complaint.reportedAt, new Date("2026-10-12T20:00:00.000Z"));
+
+	const plan = getEventPlan(getComplaintEmailEvent({ complaint, message }));
+	assert.deepEqual([plan.status.to, plan.suppression.reason, plan.suppression.detail], ["complained", "complaint", "arf/abuse"]);
+	assert.deepEqual(plan.suppression.emails, ["reader@example.com"]);
+
+	const notSpam = parseComplaint(fixture("arf-complaint.eml").toString("utf8").replace("Feedback-Type: abuse", "Feedback-Type: not-spam"));
+	assert.equal(getEventPlan(getComplaintEmailEvent({ complaint: notSpam, message })).suppression, null, "not-spam suppresses no one");
+	// Trusted like a DSN: the same Message-ID once saved, else the address sent to.
+	assert.equal(isDsnHeaderMatchTrusted({ dsn: complaint, message }), true);
+	assert.equal(isDsnHeaderMatchTrusted({ dsn: complaint, message: { ...message, providerMessageId: "<other@example.com>" } }), false);
+	const unsaved = { ...message, providerMessageId: null };
+	assert.equal(isDsnHeaderMatchTrusted({ dsn: complaint, message: unsaved }), false, "the report names another address");
+	assert.equal(isDsnHeaderMatchTrusted({ dsn: complaint, message: { ...unsaved, email: "reader@workspace-example.com" } }), true);
 });
 
 test("Message-IDs compare with or without angle brackets", () => {
@@ -252,20 +327,20 @@ test("a forged DSN naming a neighbour's _id without its Message-ID is not truste
 	assert.equal(dsn.originalMessageId, null);
 	assert.equal(dsn.mailcheapMessageId, neighbour._id);
 	// The DSN alone would suppress the neighbour, which is why the match has to be checked.
-	assert.equal(getDsnBounceEvent({ dsn, message: neighbour }).bounce.bounceType, "Permanent");
+	assert.equal(getDsnEmailEvent({ dsn, message: neighbour }).bounce, "hard");
 
 	// Sent (Message-ID saved): the DSN must return that Message-ID.
 	assert.equal(isDsnHeaderMatchTrusted({ dsn, message: neighbour }), false);
 	const wrongId = parseDsn(forgedDsn({ mailcheapId: neighbour._id, messageId: "guess@muchiround.com" }));
 	assert.equal(isDsnHeaderMatchTrusted({ dsn: wrongId, message: neighbour }), false);
 	// Not saved yet: a recipient address the neighbour wasn't sent to doesn't do either.
-	const unsaved = { ...neighbour, sesMessageId: null };
+	const unsaved = { ...neighbour, providerMessageId: null };
 	assert.equal(isDsnHeaderMatchTrusted({ dsn, message: unsaved }), false);
 	assert.equal(isDsnHeaderMatchTrusted({ dsn, message: null }), false);
 });
 
 test("a header-only DSN that beats the Message-ID save counts when it names the address sent to", () => {
-	const unsaved = { ...message, sesMessageId: undefined };
+	const unsaved = { ...message, providerMessageId: undefined };
 	const byFinal = parseDsn(forgedDsn({ mailcheapId: message._id, finalRecipient: "Reader@Example.com" }));
 	assert.equal(isDsnHeaderMatchTrusted({ dsn: byFinal, message: unsaved }), true);
 	// Forwarded: Final-Recipient is the forwarding target, the returned To is the reader.
@@ -274,7 +349,7 @@ test("a header-only DSN that beats the Message-ID save counts when it names the 
 	);
 	assert.equal(isDsnHeaderMatchTrusted({ dsn: byTo, message: unsaved }), true);
 	// Its Message-ID, when present, is enough once saved.
-	const withId = parseDsn(forgedDsn({ mailcheapId: message._id, messageId: normalizeMessageId(message.sesMessageId) }));
+	const withId = parseDsn(forgedDsn({ mailcheapId: message._id, messageId: normalizeMessageId(message.providerMessageId) }));
 	assert.equal(isDsnHeaderMatchTrusted({ dsn: withId, message }), true);
 });
 
@@ -283,8 +358,8 @@ test("the real Stalwart captures carry their Message-ID, so the header match hol
 		const dsn = parseDsn(fixture(name));
 		assert.ok(dsn.originalMessageId, name);
 		assert.ok(dsn.mailcheapMessageId, name);
-		const sent = { _id: dsn.mailcheapMessageId, email: "x@example.com", sesMessageId: `<${dsn.originalMessageId}>` };
+		const sent = { _id: dsn.mailcheapMessageId, email: "x@example.com", providerMessageId: `<${dsn.originalMessageId}>` };
 		assert.equal(isDsnHeaderMatchTrusted({ dsn, message: sent }), true, name);
-		assert.equal(isDsnHeaderMatchTrusted({ dsn, message: { ...sent, sesMessageId: "<other@muchiround.com>" } }), false);
+		assert.equal(isDsnHeaderMatchTrusted({ dsn, message: { ...sent, providerMessageId: "<other@muchiround.com>" } }), false);
 	}
 });

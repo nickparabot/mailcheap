@@ -33,7 +33,7 @@ export default async function AuthorPage({ params }) {
 	if (!page) notFound();
 	const { newsletter, author } = page;
 
-	const issues = await listArchiveIssues(newsletter._id);
+	const issues = await listArchiveIssues(newsletter);
 	const urls = getArchiveUrls(newsletter);
 	const firstName = author.name.split(" ")[0];
 
@@ -48,7 +48,7 @@ export default async function AuthorPage({ params }) {
 						size={96}
 						className="rounded-full shadow-[0_8px_24px_-8px_rgb(0_0_0/0.25)] animate-enter"
 					/>
-					<h1 style={{ "--stagger": 1 }} className="mt-6 text-4xl font-semibold tracking-tight animate-enter sm:text-5xl">
+					<h1 style={{ "--stagger": 1 }} className="mt-6 text-4xl font-theme-heading animate-enter sm:text-5xl">
 						{author.name}
 					</h1>
 					{author.bio && (

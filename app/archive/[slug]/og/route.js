@@ -5,8 +5,11 @@ import { countReaders, getArchiveIssue, getArchiveNewsletter } from "@/lib/archi
 import { getArchiveUrls } from "@/lib/archive-hosts";
 import { getIssueDate } from "@/lib/archive-issues";
 import { SHARE_IMAGE_SIZE } from "@/lib/archive-seo";
+import { mixColors } from "@/lib/colors";
 import { getAppUrl } from "@/lib/config";
 import { formatDate, formatNumber } from "@/lib/format";
+import { readLogo } from "@/lib/og-image";
+import { resolveTheme } from "@/lib/themes";
 
 const [geistRegular, geistSemiBold] = await Promise.all([
 	readFile(join(process.cwd(), "assets/fonts/Geist-Regular.ttf")),
@@ -18,30 +21,20 @@ const FONTS = [
 ];
 const COLORS = { foreground: "#0a0a0a", muted: "#737373", border: "#e5e5e5" };
 
-async function loadImage(url) {
-	const buffer = url.startsWith("/")
-		? await readFile(join(process.cwd(), "public", url)).catch(() => null)
-		: await fetch(url, { signal: AbortSignal.timeout(5000) })
-				.then((response) => (response.ok ? response.arrayBuffer() : null))
-				.then((data) => data && Buffer.from(data))
-				.catch(() => null);
-	if (!buffer) return null;
-	const type = buffer[0] === 0x89 && buffer[1] === 0x50 ? "png" : buffer[0] === 0xff && buffer[1] === 0xd8 ? "jpeg" : null;
-	return type && `data:image/${type};base64,${buffer.toString("base64")}`;
-}
-
-// The card renderer can't decode WebP, so a WebP logo uses the PNG saved next to it.
-async function readLogo(imageUrl) {
-	if (!imageUrl) return null;
-	return (await loadImage(imageUrl.replace(/\.webp$/i, ".png"))) ?? loadImage(imageUrl);
-}
-
 // Each issue gets its own soft tint, so archive cards stand out from the page and a row of them
-// doesn't look like one card repeated.
-function issueBackground(slug) {
+// doesn't look like one card repeated. A newsletter theme's palette tints toward its accent instead.
+function issueBackground(slug, theme) {
 	let hue = 0;
 	for (const character of slug) hue = (hue * 31 + character.codePointAt(0)) % 360;
-	return `linear-gradient(135deg, hsl(${hue}, 85%, 96%), hsl(${(hue + 45) % 360}, 75%, 89%))`;
+	if (theme.isAdaptive) return `linear-gradient(135deg, hsl(${hue}, 85%, 96%), hsl(${(hue + 45) % 360}, 75%, 89%))`;
+	const { background, accent } = theme.colors;
+	const step = (hue % 4) * 0.05;
+	return `linear-gradient(135deg, ${mixColors(background, accent, 0.06 + step)}, ${mixColors(background, accent, 0.26 + step)})`;
+}
+
+function getColors(theme) {
+	if (theme.isAdaptive) return { background: "#ffffff", ...COLORS };
+	return { background: theme.colors.background, foreground: theme.colors.text, muted: theme.palette.mutedText, border: theme.palette.border };
 }
 
 // Share card for the archive home, and for issues that have no thumbnail of their own.
@@ -51,12 +44,14 @@ export async function GET(request, { params }) {
 	if (!newsletter) return new Response("Not found", { status: 404 });
 
 	const postSlug = new URL(request.url).searchParams.get("p");
-	const issue = postSlug ? await getArchiveIssue(newsletter._id.toString(), postSlug) : null;
+	const issue = postSlug ? await getArchiveIssue(newsletter, postSlug) : null;
 	if (postSlug && !issue) return new Response("Not found", { status: 404 });
 
-	const [logo, readers] = await Promise.all([readLogo(newsletter.imageUrl), countReaders(newsletter._id.toString())]);
-	const domain = new URL(getArchiveUrls(newsletter, undefined, getAppUrl()).siteIndex).host;
+	const [logo, readers] = await Promise.all([readLogo(newsletter.imageUrl), countReaders(newsletter)]);
+	const domain = new URL(getArchiveUrls(newsletter).siteIndex).host;
 	const footer = issue ? formatDate(getIssueDate(issue)) : readers >= 100 ? `Join ${formatNumber(readers)} readers` : "";
+	const theme = resolveTheme(newsletter.theme);
+	const colors = getColors(theme);
 
 	return new ImageResponse(
 		<div
@@ -67,10 +62,10 @@ export async function GET(request, { params }) {
 				flexDirection: "column",
 				justifyContent: "space-between",
 				padding: 72,
-				backgroundColor: "#ffffff",
-				...(issue && { backgroundImage: issueBackground(issue.archiveSlug) }),
+				backgroundColor: colors.background,
+				...(issue && { backgroundImage: issueBackground(issue.archiveSlug, theme) }),
 				fontFamily: "Geist",
-				color: COLORS.foreground,
+				color: colors.foreground,
 			}}
 		>
 			<div style={{ display: "flex", alignItems: "center", gap: 20 }}>
@@ -80,7 +75,7 @@ export async function GET(request, { params }) {
 						src={logo}
 						width={issue ? 64 : 112}
 						height={issue ? 64 : 112}
-						style={{ borderRadius: issue ? 16 : 28, border: `1px solid ${COLORS.border}` }}
+						style={{ borderRadius: issue ? 16 : 28, border: `1px solid ${colors.border}` }}
 						alt=""
 					/>
 				)}
@@ -99,13 +94,13 @@ export async function GET(request, { params }) {
 					{issue ? issue.subject : newsletter.name}
 				</span>
 				{(issue ? issue.previewText : newsletter.description) && (
-					<span style={{ fontSize: 32, lineHeight: 1.35, color: COLORS.muted }}>
+					<span style={{ fontSize: 32, lineHeight: 1.35, color: colors.muted }}>
 						{issue ? issue.previewText : newsletter.description}
 					</span>
 				)}
 			</div>
 
-			<div style={{ display: "flex", justifyContent: "space-between", fontSize: 28, color: COLORS.muted }}>
+			<div style={{ display: "flex", justifyContent: "space-between", fontSize: 28, color: colors.muted }}>
 				<span>{footer}</span>
 				<span>{domain}</span>
 			</div>

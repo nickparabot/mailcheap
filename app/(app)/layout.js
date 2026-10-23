@@ -1,29 +1,23 @@
-import Link from "next/link";
-import LogoMailcheap from "@/components/LogoMailcheap";
-import NavFooter from "@/components/NavFooter";
-import NavLinks from "@/components/NavLinks";
-import NavMobile from "@/components/NavMobile";
-import { requireSession } from "@/lib/auth";
+import { cookies } from "next/headers";
+import { redirect } from "next/navigation";
+import { after } from "next/server";
+import LayoutDashboard from "@/components/LayoutDashboard";
+import { isAdmin, requireAccount } from "@/lib/auth";
+import { needsOnboarding } from "@/lib/onboarding";
+import { rememberTimeZone } from "@/lib/summary-send";
+import { TIME_ZONE_COOKIE } from "@/lib/time-zone";
 
+// Opens without a plan: what costs something (sending, imports, domains, API keys) shows the paywall.
+// Billing lives in (account), outside this check.
 export default async function AppLayout({ children }) {
-	await requireSession();
+	const { user, account } = await requireAccount();
+	if (await needsOnboarding(account)) redirect("/welcome");
+	const timeZone = (await cookies()).get(TIME_ZONE_COOKIE)?.value;
+	after(() => rememberTimeZone(account, timeZone).catch((error) => console.error("[summary] Could not save the timezone:", error.message)));
 
 	return (
-		<div className="flex min-h-dvh flex-col md:flex-row">
-			<aside className="sticky top-0 hidden h-dvh w-60 shrink-0 flex-col border-r border-border/60 px-3 py-4 md:flex">
-				<Link href="/" className="mb-6 flex h-9 items-center gap-2 px-2.5">
-					<LogoMailcheap />
-					<span className="text-sm font-semibold tracking-tight">Mailcheap</span>
-				</Link>
-				<NavLinks />
-				<div className="mt-auto">
-					<NavFooter />
-				</div>
-			</aside>
-			<NavMobile footer={<NavFooter />} />
-			<main className="min-w-0 flex-1">
-				<div className="mx-auto w-full max-w-6xl px-4 py-6 md:px-10 md:py-10">{children}</div>
-			</main>
-		</div>
+		<LayoutDashboard user={user} account={account} isAdmin={isAdmin(user)}>
+			{children}
+		</LayoutDashboard>
 	);
 }

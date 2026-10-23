@@ -21,6 +21,8 @@ const STUBS = {
 	"@aws-sdk/client-s3": stub("s3.mjs"),
 	"@aws-sdk/client-cloudfront": stub("cloudfront.mjs"),
 	"@upstash/qstash": stub("qstash.mjs"),
+	nodemailer: stub("nodemailer.mjs"),
+	imapflow: stub("imapflow.mjs"),
 	"@upstash/qstash/nextjs": stub("qstash-nextjs.mjs"),
 	"@better-auth/cimd/node": stub("cimd-node.mjs"),
 	"botid/server": stub("botid-server.mjs"),

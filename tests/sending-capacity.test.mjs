@@ -130,3 +130,27 @@ test("SES: its own count against its daily quota, with its rate", async () => {
 	});
 	assert.match(await render(capacity), /Up to 14 a second/);
 });
+
+test("an SMTP relay: every email that went out against SEND_RATE_PER_SECOND, the only cap MailCheap keeps for it", async () => {
+	const relay = { EMAIL_PROVIDER: "smtp", SMTP_HOST: "relay.example.com", SMTP_DOMAINS: "example.com", SEND_RATE_PER_SECOND: "5" };
+	const capacity = await withEnv(relay, () => m.capacity.getSendingCapacity({ now: NOW, fresh: true }));
+	assert.deepEqual(capacity, {
+		lanes: [
+			{
+				label: "All emails",
+				status: null,
+				meters: [
+					{ label: "Last hour", used: 6, cap: 18_000 },
+					{ label: "Last 24 hours", used: 9, cap: 432_000 },
+				],
+				perSecond: 5,
+			},
+		],
+	});
+	const html = await render(capacity);
+	assert.match(html, /Up to 5 a second/);
+	assert.doesNotMatch(html, /SMTP|relay\.example\.com/i);
+
+	const unconfigured = await withEnv({ ...relay, SMTP_DOMAINS: "" }, () => m.capacity.getSendingCapacity({ now: NOW, fresh: true }));
+	assert.deepEqual(unconfigured, { error: "unconfigured" });
+});

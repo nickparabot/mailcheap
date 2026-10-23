@@ -39,7 +39,11 @@ function getObject({ Bucket, Key }, config) {
 	const object = objects.find((item) => item.Bucket === Bucket && item.Key === Key);
 	if (!object) throw Object.assign(new Error("The specified key does not exist."), { name: "NoSuchKey" });
 	reads.push({ Bucket, Key, config });
-	return { Body: { transformToByteArray: async () => new Uint8Array(object.Body) } };
+	const bytes = new Uint8Array(object.Body);
+	return {
+		ContentLength: bytes.length,
+		Body: { transformToByteArray: async () => bytes, transformToWebStream: () => new Response(bytes).body },
+	};
 }
 
 export function PutObjectCommand(input) {

@@ -11,9 +11,15 @@ const CONTENT_SECURITY_POLICY = [
 	"script-src-attr 'none'",
 ].join("; ");
 
-// Uploads served from the S3 bucket's CDN, read at build time like the rest of this file.
+// Uploads served from the S3 bucket's CDN, or from the app's own /media (http on a laptop), read at build time like the
+// rest of this file.
 const IMAGES_CDN_URL = process.env.IMAGES_CDN_URL;
-const IMAGES_CDN_HOST = IMAGES_CDN_URL && URL.canParse(IMAGES_CDN_URL) ? new URL(IMAGES_CDN_URL).hostname : null;
+const IMAGES_CDN = IMAGES_CDN_URL && URL.canParse(IMAGES_CDN_URL) ? new URL(IMAGES_CDN_URL) : null;
+const IMAGES_CDN_PATTERN = IMAGES_CDN && {
+	protocol: IMAGES_CDN.protocol.slice(0, -1),
+	hostname: IMAGES_CDN.hostname,
+	...(IMAGES_CDN.port && { port: IMAGES_CDN.port }),
+};
 
 const SECURITY_HEADERS = [
 	{ key: "Content-Security-Policy", value: CONTENT_SECURITY_POLICY },
@@ -48,7 +54,7 @@ const nextConfig = {
 	images: {
 		remotePatterns: [
 			{ protocol: "https", hostname: "*.public.blob.vercel-storage.com" },
-			...(IMAGES_CDN_HOST ? [{ protocol: "https", hostname: IMAGES_CDN_HOST }] : []),
+			...(IMAGES_CDN_PATTERN ? [IMAGES_CDN_PATTERN] : []),
 		],
 	},
 	async headers() {

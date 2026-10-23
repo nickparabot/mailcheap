@@ -12,9 +12,9 @@ const NOT_FOUND_PATH = "/_not-on-this-server";
 const BOTID_PATH_PREFIX = "/149e9513-01fa-4fb0-aad4-566afd725d1b/2d206a39-8ed7-437e-a3be-862e0f06eea3/";
 
 // Reachable without a session: recipients, mail providers, AWS, Stripe, QStash, Vercel Cron, API-key
-// and OAuth clients (REST and MCP, OAuth discovery), the docs, the help center, their search index and
-// uptime checks. The consent page checks the session itself, so a signed-out visitor goes to sign-in with
-// the app's request.
+// and OAuth clients (REST and MCP, OAuth discovery), the docs, the help center, their search index,
+// uptime checks and uploaded images (/media). The consent page checks the session itself, so a signed-out
+// visitor goes to sign-in with the app's request.
 const PUBLIC_PATHS = [
 	/^\/api\/health$/,
 	/^\/favicon\.ico$/,
@@ -48,6 +48,7 @@ const PUBLIC_PATHS = [
 	/^\/api\/webhooks\//,
 	/^\/api\/jobs\//,
 	/^\/api\/cron\//,
+	/^\/media\//,
 ];
 
 // A newsletter's host carries its archive and the links in its emails, never the dashboard, not even its login page.

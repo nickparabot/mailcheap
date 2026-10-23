@@ -174,7 +174,7 @@ describe("/", () => {
 });
 
 describe("public pages", () => {
-	test("the marketing site's pages, the docs, the help center, the sitemap, robots.txt, the share image and the llms files open without a session", async () => {
+	test("the marketing site's pages, the docs, the help center, the sitemap, robots.txt, the share image, the llms files and uploaded images open without a session", async () => {
 		const paths = [
 			...m.siteExtensions.publicPages.filter((path) => path !== "/"),
 			...m.docs.DOC_PAGES.map(({ href }) => href),
@@ -185,6 +185,7 @@ describe("public pages", () => {
 			"/llms.txt",
 			"/llms-full.txt",
 			"/api/health",
+			"/media/accounts/6a0000000000000000000001/images/cover-0123456789abcdef.png",
 		];
 		for (const path of paths) assert.deepEqual(outcome(await visit(path)), { next: true }, path);
 	});

@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { getContrast } from "../lib/colors.js";
 import { getConfirmationContent } from "../lib/confirmation-content.js";
 import { renderEmail } from "../lib/render-email.js";
+import { THEME_PRESETS, getEmailTheme, resolveTheme } from "../lib/themes.js";
 
 const markdown = "# Big news\n\nA [link](https://example.org).\n\n:::box\nA box\n:::\n\n> A quote";
 const base = { markdown, subject: "Hi", previewText: "Preview", webUrl: "https://example.org/p/hi" };
@@ -49,4 +51,42 @@ test("editor pictures take the theme's corners; designed HTML emails keep their 
 	assert.match(rich.html, /<img style="display:block;max-width:100%;height:auto;margin:24px auto;border-radius:0px;"/);
 	const designed = { format: "html", html: "<html><body><p>Hi</p></body></html>", subject: "Hi" };
 	assert.equal(renderEmail({ ...designed, newsletter: { name: "N", theme: { preset: "midnight" } } }).html, renderEmail({ ...designed, newsletter: { name: "N" } }).html);
+});
+
+// The colour a themed mail paints its 12 px footer in, the unsubscribe link beside it, and the ground behind both.
+function footerColors(html) {
+	const background = /<body style="[^"]*background:(#[0-9a-f]{6});/.exec(html)?.[1];
+	const [, text, link] = /font-size:12px;line-height:1\.6;color:(#[0-9a-f]{6});border-top[\s\S]*?<a href="[^"]*" style="color:(#[0-9a-f]{6});/.exec(html) ?? [];
+	return { background, text, link };
+}
+
+test("a custom light palette's footer, the line the unsubscribe link sits on, clears 4.5:1 on the page", () => {
+	// Doro's own palette: cream ground, warm ink, brand accent. Mixing the ink 45% into the ground gave 3.69:1.
+	const { html } = render({ preset: "mailcheap", colors: { background: "#fbf6ee", text: "#2a1b11", accent: "#a5620a" } });
+	const { background, text, link } = footerColors(html);
+	assert.equal(background, "#fbf6ee");
+	assert.equal(link, text, "the unsubscribe link takes the footer's own shade");
+	assert.ok(getContrast(text, background) >= 4.5, `footer ${text} on ${background} is ${getContrast(text, background).toFixed(2)}:1`);
+});
+
+test("a custom dark palette's footer clears 4.5:1 too: the same derivation runs on a dark ground", () => {
+	// A slate ground with a soft grey ink: mixing 45% of it in landed at 4.06:1 before the floor.
+	const { html } = render({ preset: "mailcheap", colors: { background: "#12141a", text: "#c9c6bf", accent: "#8fb3ff" } });
+	const { background, text, link } = footerColors(html);
+	assert.equal(background, "#12141a");
+	assert.equal(link, text);
+	assert.ok(getContrast(text, background) >= 4.5, `footer ${text} on ${background} is ${getContrast(text, background).toFixed(2)}:1`);
+});
+
+test("the floor never touches MailCheap's own footer: the default email is the email it always was", () => {
+	assert.equal(footerColors(render(null).html).text, "#71717a");
+	assert.equal(render({ preset: "mailcheap" }).html, render(null).html);
+});
+
+test("every preset's footer clears the floor, light or dark", () => {
+	for (const preset of THEME_PRESETS) {
+		const theme = getEmailTheme(resolveTheme({ preset: preset.id }));
+		const contrast = getContrast(theme.muted, theme.background);
+		assert.ok(contrast >= 4.5, `${preset.id} footer ${theme.muted} on ${theme.background} is ${contrast.toFixed(2)}:1`);
+	}
 });

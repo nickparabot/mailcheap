@@ -90,3 +90,51 @@ test("every preset's footer clears the floor, light or dark", () => {
 		assert.ok(contrast >= 4.5, `${preset.id} footer ${theme.muted} on ${theme.background} is ${contrast.toFixed(2)}:1`);
 	}
 });
+
+// The "Read online" link above the body: the colour it is painted in and whether it carries an underline.
+function readOnline(html) {
+	const [, color, decoration] = /padding:0 0 24px;font-size:12px;line-height:1;"><a href="[^"]*" style="color:(#[0-9a-f]{6});text-decoration:([a-z]+);">Read online<\/a>/.exec(html) ?? [];
+	return { color, decoration };
+}
+
+// The ground the mail paints behind the link: the body's own background.
+function bodyBackground(html) {
+	return /<body style="[^"]*background:(#[0-9a-f]{6});/.exec(html)?.[1];
+}
+
+test("the default mail's Read online link clears 4.5:1 on white and is underlined", () => {
+	// It was #a1a1aa at 2.56:1 with no underline: unreadable, and nothing else said it was a link.
+	const { html } = render(null);
+	const { color, decoration } = readOnline(html);
+	assert.equal(color, "#71717a");
+	assert.equal(decoration, "underline");
+	assert.ok(getContrast(color, "#ffffff") >= 4.5, `Read online ${color} on #ffffff is ${getContrast(color, "#ffffff").toFixed(2)}:1`);
+	assert.equal(render({ preset: "mailcheap" }).html, html, "MailCheap's theme and the unthemed mail are the same email");
+});
+
+test("a custom palette's Read online link clears 4.5:1 on its own page and is underlined", () => {
+	// Doro's palette again: the faded ink landed at 2.45:1, the same fade the footer used to have.
+	const { html } = render({ preset: "mailcheap", colors: { background: "#fbf6ee", text: "#2a1b11", accent: "#a5620a" } });
+	const { color, decoration } = readOnline(html);
+	const background = bodyBackground(html);
+	assert.equal(decoration, "underline");
+	assert.ok(getContrast(color, background) >= 4.5, `Read online ${color} on ${background} is ${getContrast(color, background).toFixed(2)}:1`);
+});
+
+test("every preset's Read online link clears the floor on its own page and is underlined", () => {
+	for (const preset of THEME_PRESETS) {
+		const { html } = render({ preset: preset.id });
+		const { color, decoration } = readOnline(html);
+		const background = bodyBackground(html);
+		assert.equal(decoration, "underline", `${preset.id} underline`);
+		assert.ok(getContrast(color, background) >= 4.5, `${preset.id} Read online ${color} on ${background} is ${getContrast(color, background).toFixed(2)}:1`);
+	}
+});
+
+test("a designed HTML email's Read online link is underlined and takes the readable default shade", () => {
+	const { html } = renderEmail({ format: "html", html: "<html><body><p>Issue</p></body></html>", subject: "Hi", webUrl: "https://example.org/p/hi", newsletter: { name: "N" } });
+	const [, color, decoration] = /padding:12px 16px 0;[^"]*"><a href="[^"]*" style="color:(#[0-9a-f]{6});text-decoration:([a-z]+);">Read online<\/a>/.exec(html) ?? [];
+	assert.equal(decoration, "underline");
+	assert.equal(color, "#71717a");
+	assert.ok(getContrast(color, "#ffffff") >= 4.5, `Read online ${color} on #ffffff is ${getContrast(color, "#ffffff").toFixed(2)}:1`);
+});

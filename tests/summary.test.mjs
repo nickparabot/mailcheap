@@ -220,12 +220,13 @@ const LINKS = {
 };
 
 function renderEmail(overrides = {}) {
+	const { bars, ...rest } = overrides;
 	const period = getSummaryPeriod({ frequency: "weekly", todayKey: "2026-10-26", timeZone: "UTC" });
 	const main = {
 		id: "74f1a2b3c4d5e6f7a8b9c0d2",
 		name: "<b>Hens</b> & co",
 		url: "https://mail.example.com/newsletters/74f1a2b3c4d5e6f7a8b9c0d2?next=%2F",
-		subscribers: { joined: 12, left: 1, total: 1_210, previousTotal: 1_199, previousJoined: 8, bars: [{ startKey: "2026-10-19", endKey: "2026-10-25", joined: 12, left: 1 }] },
+		subscribers: { joined: 12, left: 1, total: 1_210, previousTotal: 1_199, previousJoined: 8, bars: bars ?? [{ startKey: "2026-10-19", endKey: "2026-10-25", joined: 12, left: 1 }] },
 		unsubscribed: 1,
 		previousUnsubscribed: 3,
 		issue: {
@@ -242,7 +243,7 @@ function renderEmail(overrides = {}) {
 		},
 		line: "12 people joined this week, 4 more than the week before.",
 	};
-	return renderSummaryEmail({ frequency: "weekly", period, newsletters: [main], links: LINKS, postalAddress: "1 Main St, Singapore", ...overrides });
+	return renderSummaryEmail({ frequency: "weekly", period, newsletters: [main], links: LINKS, postalAddress: "1 Main St, Singapore", ...rest });
 }
 
 test("the summary email escapes what customers write and carries a one-click unsubscribe", () => {
@@ -278,4 +279,27 @@ test("a daily summary says yesterday, and has no share link without one", () => 
 	const withoutShare = renderEmail({ links: { ...LINKS, shareUrl: null } });
 	assert.ok(!withoutShare.html.includes("Share this week"));
 	assert.ok(!withoutShare.text.includes("Share this week"));
+});
+
+test("the chart's period label counts the bars it has: one bar reads one day or one week, never \"Last 1 days\"", () => {
+	// The cell right of "New subscribers" is the chart's period label.
+	const chartLabel = (html) => html.match(/New subscribers<\/td>\s*<td[^>]*>([^<]+)<\/td>/)[1];
+	const history = (count) => Array.from({ length: count }, (_, index) => ({ key: `2026-10-${String(19 + index).padStart(2, "0")}`, joined: index + 1, left: 0, total: 100 + index }));
+	const label = (frequency, count) => {
+		const period = getSummaryPeriod({ frequency, todayKey: "2026-10-26", timeZone: "UTC" });
+		const subscribers = summarizeSubscribers(history(count), frequency);
+		assert.equal(subscribers.bars.length, frequency === "daily" ? count : Math.floor(count / 7), "daily bars are days, weekly bars are weeks");
+		const { html } = renderEmail({ frequency, period, bars: subscribers.bars });
+		assert.ok(!/Last 1 (days|weeks)/.test(html), `"Last 1 ${frequency === "daily" ? "days" : "weeks"}" is not a number form`);
+		return chartLabel(html);
+	};
+
+	// A one-bar account: a daily summary with one day of history, a weekly one 7–13 days old.
+	assert.equal(label("daily", 1), "Last 1 day");
+	assert.equal(label("weekly", 7), "Last 1 week");
+	// More bars keep the plural, and the existing shapes are unchanged.
+	assert.equal(label("daily", 2), "Last 2 days");
+	assert.equal(label("daily", 14), "Last 14 days");
+	assert.equal(label("weekly", 56), "Last 8 weeks");
+	assert.equal(chartLabel(renderEmail().html), "Last 1 week", "the existing weekly fixture shape, one bar");
 });

@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { getContrast } from "../lib/colors.js";
 import {
 	getDueSummary,
 	getLatestSummaryPeriod,
@@ -20,6 +21,7 @@ import {
 	verifySummarySettingsToken,
 	verifySummaryShareToken,
 } from "../lib/summary-token.js";
+import { darkRules, textColors } from "./helpers/email-colors.mjs";
 
 process.env.BETTER_AUTH_SECRET = "test-session-secret-with-at-least-32-characters";
 process.env.APP_URL = "https://mail.example.com";
@@ -221,7 +223,12 @@ const LINKS = {
 
 function renderEmail(overrides = {}) {
 	const period = getSummaryPeriod({ frequency: "weekly", todayKey: "2026-10-26", timeZone: "UTC" });
-	const main = {
+	return renderSummaryEmail({ frequency: "weekly", period, newsletters: [newsletter()], links: LINKS, postalAddress: "1 Main St, Singapore", ...overrides });
+}
+
+// The newsletter the fixture renders: the one shown in full, and a line each for the others.
+function newsletter(overrides = {}) {
+	return {
 		id: "74f1a2b3c4d5e6f7a8b9c0d2",
 		name: "<b>Hens</b> & co",
 		url: "https://mail.example.com/newsletters/74f1a2b3c4d5e6f7a8b9c0d2?next=%2F",
@@ -241,8 +248,21 @@ function renderEmail(overrides = {}) {
 			topLink: { url: "javascript:alert(1)", clickers: 30 },
 		},
 		line: "12 people joined this week, 4 more than the week before.",
+		...overrides,
 	};
-	return renderSummaryEmail({ frequency: "weekly", period, newsletters: [main], links: LINKS, postalAddress: "1 Main St, Singapore", ...overrides });
+}
+
+// Every shape the email takes - the numbers and the issue in full, a daily one, the other newsletters, and one with
+// nothing to report - since each is painted in the same palette.
+function summaryEmails() {
+	const daily = getSummaryPeriod({ frequency: "daily", todayKey: "2026-10-26", timeZone: "UTC" });
+	const other = newsletter({ id: "74f1a2b3c4d5e6f7a8b9c0d4", name: "Field notes", subscribers: { joined: 2, left: 0, total: 40, previousTotal: 38, previousJoined: 1, bars: [{ startKey: "2026-10-19", endKey: "2026-10-25", joined: 2, left: 0 }] } });
+	return {
+		weekly: renderEmail().html,
+		daily: renderEmail({ frequency: "daily", period: daily }).html,
+		"with another newsletter": renderEmail({ newsletters: [newsletter(), other] }).html,
+		"with no issue, address or share link": renderEmail({ newsletters: [newsletter({ issue: null })], postalAddress: null, links: { ...LINKS, shareUrl: null } }).html,
+	};
 }
 
 test("the summary email escapes what customers write and carries a one-click unsubscribe", () => {
@@ -278,4 +298,42 @@ test("a daily summary says yesterday, and has no share link without one", () => 
 	const withoutShare = renderEmail({ links: { ...LINKS, shareUrl: null } });
 	assert.ok(!withoutShare.html.includes("Share this week"));
 	assert.ok(!withoutShare.text.includes("Share this week"));
+});
+
+test("the chart's date labels and the footer line are readable without the style block", () => {
+	// They were #a1a1aa: 2.46:1 on the page and 2.56:1 on the card, with the dark rule - inside a media query - as the
+	// only thing that lifted them, so the light mail a client renders when it drops head styles had the unreadable one.
+	const { html } = renderEmail();
+	const withoutStyles = html.replace(/<style>[\s\S]*?<\/style>/, "");
+	const faints = [...withoutStyles.matchAll(/class="faint"[^>]*style="[^"]*color:(#[0-9a-f]{6})[^"]*"/g)].map(([, color]) => color);
+	assert.equal(faints.length, 3, "the two date labels and the footer line");
+	for (const color of faints) {
+		assert.ok(getContrast(color, "#fafafa") >= 4.5, `faint ${color} on the page is ${getContrast(color, "#fafafa").toFixed(2)}:1`);
+		assert.ok(getContrast(color, "#ffffff") >= 4.5, `faint ${color} on the card is ${getContrast(color, "#ffffff").toFixed(2)}:1`);
+	}
+	assert.doesNotMatch(withoutStyles, /color:#a1a1aa/i, "no text is painted the 2.46:1 #a1a1aa");
+});
+
+test("every colour the summary email paints text in clears 4.5:1 on the ground behind it, with no style block", () => {
+	for (const [shape, html] of Object.entries(summaryEmails())) {
+		for (const { text, color, background } of textColors(html)) {
+			if (!color || !background) continue;
+			const contrast = getContrast(color, background);
+			assert.ok(contrast >= 4.5, `${shape}: "${text}" is ${color} on ${background}, ${contrast.toFixed(2)}:1`);
+		}
+	}
+});
+
+test("the summary email's dark styles clear 4.5:1 on its dark grounds too", () => {
+	// The date labels sat on the dark card at 3.81:1 and the footer line on the dark page at 4.10:1: the same palette
+	// failing in the other direction, where only a client that keeps the style block ever sees it.
+	for (const [shape, html] of Object.entries(summaryEmails())) {
+		const rules = darkRules(html);
+		assert.ok(rules.length, `${shape}: the dark rules are in the style block`);
+		for (const { text, color, background } of textColors(html, rules)) {
+			if (!color || !background) continue;
+			const contrast = getContrast(color, background);
+			assert.ok(contrast >= 4.5, `${shape} in dark: "${text}" is ${color} on ${background}, ${contrast.toFixed(2)}:1`);
+		}
+	}
 });

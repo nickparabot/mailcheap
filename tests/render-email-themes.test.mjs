@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { getContrast } from "../lib/colors.js";
+import { getContrast, mixColors } from "../lib/colors.js";
 import { getConfirmationContent } from "../lib/confirmation-content.js";
 import { renderEmail } from "../lib/render-email.js";
 import { THEME_PRESETS, getEmailTheme, resolveTheme } from "../lib/themes.js";
@@ -174,4 +174,34 @@ test("the footer Mailcheap appends to a designed email takes the designed ink to
 	assert.match(footer, /You're receiving this because you subscribed to N\./, "the appended footer");
 	assert.match(footer, /<a href="https:\/\/example\.org\/u\/abc" style="color:inherit;text-decoration:underline;">Unsubscribe<\/a>/);
 	assert.deepEqual([...footer.matchAll(/[^-]color:([^;"]+);/g)].map((m) => m[1]), ["inherit", "inherit"], "the line and its link take the designed ink");
+});
+
+test("the rule above the appended footer is the designed ink at a fraction, not our #e4e4e7", () => {
+	// The ink fix left the separator behind: a themed #e4e4e7 is 1.18:1 on Doro's cream page (invisible) and 13.81:1
+	// on its dark one - a near-white streak across a designed email, in a palette Mailcheap does not own. The rule is
+	// ours, so it is drawn in the page's ink (currentColor) at a fraction of it: a separator on either ground.
+	const { html } = renderEmail({ format: "html", html: designedEmail, subject: "Hi", unsubscribeUrl: "https://example.org/u/abc", newsletter: { name: "N" } });
+	const footer = /<tr><td style="padding:32px 0 0;[\s\S]*?<\/td><\/tr>/.exec(html)?.[0] ?? "";
+	const rule = /<div style="border-top:([^"]+)"><\/div>/.exec(footer)?.[1] ?? "";
+	assert.match(rule, /^1px solid currentColor;/, `the rule takes the page's ink: ${rule}`);
+	assert.doesNotMatch(rule, /#[0-9a-f]{6}/i, "and not a fixed shade of ours");
+	const alpha = Number(/opacity:([\d.]+);/.exec(rule)?.[1]);
+	assert.ok(alpha > 0 && alpha < 1, `the rule is a fraction of the ink: opacity ${alpha}`);
+	for (const scheme of ["light", "dark"]) {
+		const { ink, ground } = designedScheme(scheme);
+		const painted = mixColors(ground, ink, alpha);
+		const contrast = getContrast(painted, ground);
+		assert.ok(contrast < 3, `${scheme}: the rule ${painted} on ${ground} is ${contrast.toFixed(3)}:1 - a separator, not a streak`);
+		assert.ok(contrast >= 1.2, `${scheme}: the rule ${painted} on ${ground} is ${contrast.toFixed(3)}:1 - still visible`);
+	}
+	// The shade this replaces, on the ground it looked worst on: fails both ways round (too bright on dark, gone on cream).
+	const dark = designedScheme("dark");
+	assert.ok(getContrast("#e4e4e7", dark.ground) > 13, "the old rule on the dark page");
+});
+
+// The themed footer must not move: same bytes, same shade, same rule, whatever the rule above a designed page now is.
+test("a themed email's footer keeps its own border and its own shade", () => {
+	const themed = render({ preset: "garden" }).html;
+	assert.match(themed, /<tr><td style="padding:32px 0 0;font-size:12px;line-height:1\.6;color:#[0-9a-f]{6};border-top:1px solid #[0-9a-f]{6};">\nYou're receiving this because/);
+	assert.doesNotMatch(themed, /currentColor|opacity:0\.24/, "nothing of the design path leaks into a themed mail");
 });

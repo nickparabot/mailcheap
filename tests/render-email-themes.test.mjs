@@ -131,10 +131,47 @@ test("every preset's Read online link clears the floor on its own page and is un
 	}
 });
 
-test("a designed HTML email's Read online link is underlined and takes the readable default shade", () => {
-	const { html } = renderEmail({ format: "html", html: "<html><body><p>Issue</p></body></html>", subject: "Hi", webUrl: "https://example.org/p/hi", newsletter: { name: "N" } });
-	const [, color, decoration] = /padding:12px 16px 0;[^"]*"><a href="[^"]*" style="color:(#[0-9a-f]{6});text-decoration:([a-z]+);">Read online<\/a>/.exec(html) ?? [];
+// A designed email declares its own ink and its own ground - Doro's digest is exactly that shape: a cream page, a
+// warm ink, and a dark-mode media query under a `color-scheme` that tells clients not to invert it. Mailcheap appends
+// to that page, so a fixed shade of ours lands on a ground we neither set nor know - and no single shade clears
+// 4.5:1 on both a white page and a dark one. The wrapper inherits the design's ink instead, and these cases assert
+// against the ground the design declares, never against a #ffffff we made up (that assumption is the old bug).
+const designedEmail = `<html><head><style>@media (prefers-color-scheme: dark) { body { background: #221710 !important; color: #f7eddc !important; } }</style></head><body style="background:#fbf6ee;color:#2a1b11"><p>Issue</p></body></html>`;
+
+// The ink and the ground a client paints in the scheme it is in: read off the designed page's own declarations.
+function designedScheme(scheme) {
+	const dark = /prefers-color-scheme:\s*dark[^{]*\{([^}]*)\}/i.exec(designedEmail)?.[1] ?? "";
+	const source = (scheme === "dark" ? dark : "") || /<body[^>]*style="([^"]*)"/i.exec(designedEmail)?.[1] || "";
+	return { ink: /color:\s*(#[0-9a-f]{6})/i.exec(source)?.[1], ground: /background:\s*(#[0-9a-f]{6})/i.exec(source)?.[1] };
+}
+
+// The Read online anchor on the designed path: its colour, and whether it carries an underline.
+function designedReadOnline(html) {
+	const [, color, decoration] = /padding:12px 16px 0;[^"]*"><a href="[^"]*" style="color:([a-z#0-9]+);text-decoration:([a-z]+);">Read online<\/a>/.exec(html) ?? [];
+	return { color, decoration };
+}
+
+test("a designed HTML email's Read online line takes the designed ink, not a shade of ours", () => {
+	const { html } = renderEmail({ format: "html", html: designedEmail, subject: "Hi", webUrl: "https://example.org/p/hi", newsletter: { name: "N" } });
+	const { color, decoration } = designedReadOnline(html);
 	assert.equal(decoration, "underline");
-	assert.equal(color, "#71717a");
-	assert.ok(getContrast(color, "#ffffff") >= 4.5, `Read online ${color} on #ffffff is ${getContrast(color, "#ffffff").toFixed(2)}:1`);
+	assert.equal(color, "inherit", "the designed page owns the ground, so it owns the ink");
+	assert.doesNotMatch(/<div style="padding:12px 16px 0;[\s\S]*?Read online<\/a><\/div>/.exec(html)?.[0] ?? "", /#[0-9a-f]{6}/i, "nothing of ours is painted in a fixed shade on someone else's page");
+	// The shade it lands in is the designed page's ink on the designed page's ground, in both schemes it declares.
+	// A constant #71717a is 3.63:1 on the dark ground and 4.492:1 on the cream one, so this fails if it comes back.
+	for (const scheme of ["light", "dark"]) {
+		const { ink, ground } = designedScheme(scheme);
+		const painted = color === "inherit" ? ink : color;
+		const contrast = getContrast(painted, ground);
+		assert.ok(contrast >= 4.5, `${scheme}: Read online ${painted} on ${ground} is ${contrast.toFixed(2)}:1`);
+	}
+});
+
+test("the footer Mailcheap appends to a designed email takes the designed ink too", () => {
+	// The footer is ours; the page behind it is still the design's, so it cannot be painted in a shade of ours either.
+	const { html } = renderEmail({ format: "html", html: designedEmail, subject: "Hi", unsubscribeUrl: "https://example.org/u/abc", newsletter: { name: "N", postalAddress: "1 Main St" } });
+	const footer = /<tr><td style="padding:32px 0 0;[\s\S]*?<\/td><\/tr>/.exec(html)?.[0] ?? "";
+	assert.match(footer, /You're receiving this because you subscribed to N\./, "the appended footer");
+	assert.match(footer, /<a href="https:\/\/example\.org\/u\/abc" style="color:inherit;text-decoration:underline;">Unsubscribe<\/a>/);
+	assert.deepEqual([...footer.matchAll(/[^-]color:([^;"]+);/g)].map((m) => m[1]), ["inherit", "inherit"], "the line and its link take the designed ink");
 });

@@ -13,7 +13,8 @@ export default function ButtonCheckDomain({ id }) {
 		startChecking(async () => {
 			const result = await checkDomainAction(id);
 			if (result?.error) return void toast.error(result.error);
-			if (result.verified) toast.success("Everything is in place");
+			if (result.problem) toast.error(result.problem);
+			else if (result.verified) toast.success("Everything is in place");
 			else toast.message("Some records aren't there yet. DNS changes can take up to a few hours.");
 		});
 	}

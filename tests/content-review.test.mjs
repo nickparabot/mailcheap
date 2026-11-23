@@ -13,7 +13,7 @@ import {
 	parseVerdict,
 	reviewContent,
 } from "../lib/content-review.js";
-import { activate, as, callApi, catchNotFound, catchRedirect, form, mockOpenAI, openaiRequests, platformEmails, signIn, startTestApp, withEnv } from "./helpers/app.mjs";
+import { activate, addAuthor, as, callApi, catchNotFound, catchRedirect, form, mockOpenAI, openaiRequests, platformEmails, signIn, startTestApp, withEnv } from "./helpers/app.mjs";
 import { flushAfter } from "./stubs/next-server.mjs";
 import { sent as sesEmails } from "./stubs/ses.mjs";
 
@@ -252,6 +252,7 @@ async function customer(email) {
 		)
 	);
 	user.newsletterId = url.split("/").at(-1);
+	await addAuthor(user);
 	const rows = [0, 1].map((index) => ({ email: `reader${index}@${slug}.example.org`, status: "active" }));
 	await as(user, () => m.contacts.importContacts({ newsletterId: user.newsletterId, consent: true, rows }));
 	user.key = (await as(user, () => m.apiKeys.createApiKey(null, form({ name: "Agent" })))).key;
@@ -283,12 +284,15 @@ before(async () => {
 		contacts: await import("../app/(app)/contacts/actions.js"),
 		apiKeys: await import("../app/(app)/api-keys/actions.js"),
 		admin: await import("../app/admin/actions.js"),
+		notifications: await import("../app/(app)/(notifications)/actions.js"),
 		archive: await import("../lib/archive-data.js"),
 		scheduling: await import("../lib/scheduling.js"),
 		review: await import("../lib/content-review.js"),
 		rateLimit: await import("../lib/rate-limit.js"),
+		sending: await import("../lib/sending.js"),
 		Account: (await import("../models/Account.js")).default,
 		Campaign: (await import("../models/Campaign.js")).default,
+		Contact: (await import("../models/Contact.js")).default,
 		Message: (await import("../models/Message.js")).default,
 		Newsletter: (await import("../models/Newsletter.js")).default,
 	};
@@ -347,6 +351,16 @@ describe("the content check before a send", () => {
 		assert.equal((viaApi.body.data ?? viaApi.body).pauseCode, "content_review");
 		assert.ok(!JSON.stringify(viaApi.body).includes("fake bank"), "the API never shows the check's reasons");
 		await catchNotFound(as(user, () => m.admin.approveContentReview(id)));
+		const listed = (await as(user, () => m.notifications.getNotifications())).notifications;
+		const held = listed.filter(({ path }) => path === `/campaigns/${id}`);
+		assert.deepEqual(
+			held.map(({ kind, title, path, read }) => ({ kind, title, path, read })),
+			[{ kind: "issue-review", title: "Issue under review", path: `/campaigns/${id}`, read: false }],
+			"its owner hears it waits, from the dashboard only"
+		);
+		assert.equal(held[0].body, "A person checks “Issue” before it goes out, usually within a few hours.");
+		assert.ok(!JSON.stringify(held).includes("fake bank"), "the notification never says why");
+		await as(user, () => m.notifications.markNotificationsRead(listed.map(({ id: shown }) => shown)));
 
 		assert.deepEqual(await as(admin, () => m.admin.approveContentReview(id)), { ok: true });
 		campaign = await load(user, id);
@@ -354,6 +368,12 @@ describe("the content check before a send", () => {
 		assert.equal(campaign.review.decision, "approved");
 		assert.equal(campaign.review.decidedBy, "admin@example.com");
 		assert.equal(await countMessages(user, id), 2);
+		const approved = await as(user, () => m.notifications.getNotifications());
+		assert.equal(approved.unread, 1, "the decision brings it back as new");
+		assert.deepEqual(
+			approved.notifications.filter(({ read }) => !read).map(({ id: notificationId, kind, title, body }) => ({ notificationId, kind, title, body })),
+			[{ notificationId: held[0].id, kind: "issue-approved", title: "Issue approved", body: "“Issue” passed its review and is on its way." }]
+		);
 	});
 
 	test("a web-only issue goes through the same check: held, it stays off the website until an admin approves it", async () => {
@@ -501,24 +521,40 @@ describe("the content check before a send", () => {
 	});
 });
 
-describe("tips at the review step", () => {
+describe("tips before a send or a schedule", () => {
 	const paths = (since) => openaiRequests.slice(since).map(({ path }) => path).sort();
 	const tipsApi = (user, id) => callApi("GET", `/api/v1/campaigns/${id}/tips`, { key: user.key });
+	const loadNewsletter = (user) => m.Newsletter.findOne({ accountId: user.accountId, _id: user.newsletterId }).lean();
+	const storedTips = async (user, id) => m.review.getStoredTips({ campaign: await load(user, id), newsletter: await loadNewsletter(user) });
 
-	test("they come from the one check of the draft, which its send then uses without asking OpenAI again", async () => {
+	async function runAtItsTime(user, id) {
+		const due = new Date();
+		await m.Campaign.updateOne({ accountId: user.accountId, _id: id }, { $set: { scheduledAt: due } });
+		return m.scheduling.runScheduledSend({ accountId: String(user.accountId), campaignId: id, scheduledAt: due.toISOString() });
+	}
+
+	test("writing reads nothing: a send stops for its tips, and sending it as it is uses the same check", async () => {
 		answer = "tips";
-		const user = await customer("tips-reused@example.com");
+		const user = await customer("tips-send@example.com");
 		const id = await draft(user, "FREE GIFT INSIDE!!!");
 		const requestsBefore = openaiRequests.length;
-		assert.deepEqual(await as(user, () => m.campaigns.getCampaignTips(id)), { tips: [CAPITALS_TIP] });
+		assert.deepEqual(await storedTips(user, id), []);
+		assert.equal(openaiRequests.length, requestsBefore, "opening the editor checks nothing");
+
+		assert.deepEqual(await as(user, () => m.campaigns.sendCampaign(id, { checkTips: true })), { ok: true, tips: [CAPITALS_TIP] });
 		assert.deepEqual(paths(requestsBefore), ["/moderations", "/responses"]);
 		assert.ok(!JSON.stringify(openaiRequests.slice(requestsBefore)).includes("example.org"), "no contact reaches OpenAI");
-		assert.deepEqual((await tipsApi(user, id)).body, { checked: true, tips: [CAPITALS_TIP] }, "the API gets the same");
+		const waiting = await load(user, id);
+		assert.equal(waiting.status, "draft", "nothing went out");
+		assert.equal(await countMessages(user, id), 0);
+		assert.equal(waiting.review, undefined);
+		assert.equal(waiting.draftReview.outcome, "allow");
+		assert.deepEqual(await storedTips(user, id), [CAPITALS_TIP], "the editor shows them until the issue changes");
+		assert.deepEqual(await as(user, () => m.campaigns.sendCampaign(id, { checkTips: true })), { ok: true, tips: [CAPITALS_TIP] });
 		assert.equal(openaiRequests.length, requestsBefore + 2, "the same content isn't checked twice");
-		assert.equal((await load(user, id)).status, "draft");
 
-		assert.deepEqual(await as(user, () => m.campaigns.sendCampaign(id, {})), { ok: true });
-		assert.equal(openaiRequests.length, requestsBefore + 2, "the send uses the review step's check");
+		assert.deepEqual(await as(user, () => m.campaigns.sendCampaign(id, {})), { ok: true }, "sent as it is");
+		assert.equal(openaiRequests.length, requestsBefore + 2, "with the check it stopped for");
 		const sent = await load(user, id);
 		assert.equal(sent.status, "sending");
 		assert.equal(sent.review.outcome, "allow");
@@ -526,82 +562,117 @@ describe("tips at the review step", () => {
 		assert.equal(sent.draftReview, undefined, "the send's check is the one kept");
 	});
 
-	test("content changed since is checked again when it goes out", async () => {
+	test("most issues have none and go out in the same call, checked once", async () => {
 		answer = "clean";
-		const user = await customer("tips-changed@example.com");
+		const user = await customer("tips-none@example.com");
 		const id = await draft(user, "Weekly notes");
-		assert.deepEqual(await as(user, () => m.campaigns.getCampaignTips(id)), { tips: [] });
-		await as(user, () => m.campaigns.saveCampaign(id, { subject: "Weekly notes", previewText: "This week", body: "<p>Hello again</p>" }));
 		const requestsBefore = openaiRequests.length;
-		assert.deepEqual(await as(user, () => m.campaigns.sendCampaign(id, {})), { ok: true });
+		assert.deepEqual(await as(user, () => m.campaigns.sendCampaign(id, { checkTips: true })), { ok: true });
+		assert.deepEqual(paths(requestsBefore), ["/moderations", "/responses"]);
+		assert.equal((await load(user, id)).status, "sending");
+	});
+
+	test("content changed after its tips is checked again", async () => {
+		answer = "tips";
+		const user = await customer("tips-changed@example.com");
+		const id = await draft(user, "FREE GIFT INSIDE!!!");
+		assert.ok((await as(user, () => m.campaigns.sendCampaign(id, { checkTips: true }))).tips);
+		answer = "clean";
+		await as(user, () => m.campaigns.saveCampaign(id, { subject: "A free gift inside", previewText: "This week", body: "<p>Hello</p>" }));
+		assert.deepEqual(await storedTips(user, id), [], "the old tips are gone");
+		const requestsBefore = openaiRequests.length;
+		assert.deepEqual(await as(user, () => m.campaigns.sendCampaign(id, { checkTips: true })), { ok: true });
 		assert.deepEqual(paths(requestsBefore), ["/moderations", "/responses"]);
 	});
 
-	test("content it would hold gets none: the admins hear of the draft at once, its owner never does, and its send waits without a new check", async () => {
+	test("content it would hold never stops for tips: it waits for an admin at once, who hears of it once, and its owner never why", async () => {
 		answer = "phishing";
 		const user = await customer("tips-held@example.com");
 		const id = await draft(user, "Your account", "<p>Log in to keep your account.</p>");
 		const emailsBefore = platformEmails.length;
-		assert.deepEqual(await as(user, () => m.campaigns.getCampaignTips(id)), { tips: [] });
-		const api = await tipsApi(user, id);
-		assert.deepEqual(api.body, { checked: true, tips: [] }, "like content with nothing to change");
-		assert.ok(!JSON.stringify(api.body).includes("fake bank"), "never the check's reasons");
-		const drafted = await load(user, id);
-		assert.equal(drafted.status, "draft", "nothing is held before a send");
-		assert.equal(drafted.draftReview.outcome, "block");
-		const toAdmins = emailsTo("admin@example.com", emailsBefore).filter(({ subject }) => subject === "[MailCheap] Draft would be held");
-		assert.equal(toAdmins.length, 1);
-		assert.ok(toAdmins[0].text.includes(`/admin/campaigns/${id}`));
-		assert.equal(emailsTo("tips-held@example.com", emailsBefore).length, 0);
-
-		const requestsBefore = openaiRequests.length;
-		assert.deepEqual(await as(user, () => m.campaigns.sendCampaign(id, {})), { ok: true, held: true });
-		assert.equal(openaiRequests.length, requestsBefore);
+		assert.deepEqual(await as(user, () => m.campaigns.sendCampaign(id, { checkTips: true })), { ok: true, held: true });
 		assert.equal((await load(user, id)).pauseCode, "content_review");
 		assert.equal(await countMessages(user, id), 0);
-		assert.ok(emailsTo("admin@example.com", emailsBefore).some(({ subject }) => subject === "[MailCheap] Issue held for review"));
+		const subjects = emailsTo("admin@example.com", emailsBefore).map(({ subject }) => subject);
+		assert.equal(subjects.filter((subject) => subject === "[MailCheap] Issue held for review").length, 1);
+		assert.ok(!subjects.includes("[MailCheap] Draft would be held"), "one alert for one send");
+		assert.equal(emailsTo("tips-held@example.com", emailsBefore).length, 0);
 	});
 
-	test("an unsure draft has its tips, and the admins hear of it once it goes out", async () => {
+	test("an unsure issue stops for its tips without a word to the admins, who hear of it once it goes out", async () => {
 		answer = "unsure";
 		const user = await customer("tips-unsure@example.com");
 		const id = await draft(user, "Side income", "<p>Earn $5,000 a week from home.</p>");
 		const emailsBefore = platformEmails.length;
-		const { tips } = await as(user, () => m.campaigns.getCampaignTips(id));
+		const { tips } = await as(user, () => m.campaigns.sendCampaign(id, { checkTips: true }));
 		assert.deepEqual(tips.map(({ field, quote }) => [field, quote]), [["content", "earn $5,000 a week"]]);
-		assert.equal(emailsTo("admin@example.com", emailsBefore).length, 0, "not before it goes out");
+		assert.equal(emailsTo("admin@example.com", emailsBefore).length, 0, "nothing went out yet");
 		assert.deepEqual(await as(user, () => m.campaigns.sendCampaign(id, {})), { ok: true });
-		const flagged = emailsTo("admin@example.com", emailsBefore).filter(({ subject }) => subject === "[MailCheap] Issue flagged");
-		assert.equal(flagged.length, 1);
+		assert.equal(emailsTo("admin@example.com", emailsBefore).filter(({ subject }) => subject === "[MailCheap] Issue flagged").length, 1);
 	});
 
-	test("past its own budget, or with OpenAI down, there are none and nothing is kept: the send checks as before", async () => {
+	test("a schedule stops for its tips too; scheduled as it is, it goes out at its time without another check", async () => {
+		answer = "tips";
+		const user = await customer("tips-schedule@example.com");
+		const id = await draft(user, "FREE GIFT INSIDE!!!");
+		const scheduledAt = new Date(Date.now() + 3_600_000).toISOString();
+		const requestsBefore = openaiRequests.length;
+		assert.deepEqual(await as(user, () => m.campaigns.scheduleCampaign(id, { scheduledAt, checkTips: true })), { ok: true, tips: [CAPITALS_TIP] });
+		assert.equal((await load(user, id)).status, "draft", "not scheduled yet");
+		assert.deepEqual(await as(user, () => m.campaigns.scheduleCampaign(id, { scheduledAt })), { ok: true });
+		assert.equal((await load(user, id)).status, "scheduled");
+		assert.equal(openaiRequests.length, requestsBefore + 2);
+
+		assert.equal((await runAtItsTime(user, id)).started, true);
+		assert.equal(openaiRequests.length, requestsBefore + 2, "its send uses the check of its schedule");
+		assert.equal((await load(user, id)).review.outcome, "allow");
+	});
+
+	test("a schedule of content it would hold goes through, the admins hear of it at once, and at its time it waits for them", async () => {
+		answer = "phishing";
+		const user = await customer("tips-schedule-held@example.com");
+		const id = await draft(user, "Your account", "<p>Log in to keep your account.</p>");
+		const emailsBefore = platformEmails.length;
+		const scheduledAt = new Date(Date.now() + 3_600_000).toISOString();
+		assert.deepEqual(await as(user, () => m.campaigns.scheduleCampaign(id, { scheduledAt, checkTips: true })), { ok: true });
+		const toAdmins = emailsTo("admin@example.com", emailsBefore).filter(({ subject }) => subject === "[MailCheap] Draft would be held");
+		assert.equal(toAdmins.length, 1, "trying versions without sending is never silent");
+		assert.ok(toAdmins[0].text.includes(`/admin/campaigns/${id}`));
+		assert.equal(emailsTo("tips-schedule-held@example.com", emailsBefore).length, 0);
+
+		const requestsBefore = openaiRequests.length;
+		assert.equal((await runAtItsTime(user, id)).held, true);
+		assert.equal(openaiRequests.length, requestsBefore);
+		assert.equal((await load(user, id)).pauseCode, "content_review");
+	});
+
+	test("past its own budget a schedule goes through untouched, and with OpenAI down a send goes out after one try", async () => {
 		answer = "tips";
 		const user = await customer("tips-budget@example.com");
 		await exhaust(m.review.DRAFT_CHECKS, user);
 		const id = await draft(user, "FREE GIFT INSIDE!!!");
+		const scheduledAt = new Date(Date.now() + 3_600_000).toISOString();
 		const requestsBefore = openaiRequests.length;
-		assert.deepEqual(await as(user, () => m.campaigns.getCampaignTips(id)), { tips: [] });
-		assert.deepEqual((await tipsApi(user, id)).body, { checked: false, tips: [] });
-		assert.equal(openaiRequests.length, requestsBefore);
+		assert.deepEqual(await as(user, () => m.campaigns.scheduleCampaign(id, { scheduledAt, checkTips: true })), { ok: true });
+		assert.equal(openaiRequests.length, requestsBefore, "no check past the budget");
+		assert.equal((await load(user, id)).draftReview, undefined);
+		await runAtItsTime(user, id);
+		assert.deepEqual(paths(requestsBefore), ["/moderations", "/responses"], "its send checks it as before");
 
 		answer = "down";
 		const other = await customer("tips-down@example.com");
 		const failed = await draft(other, "FREE GIFT INSIDE!!!");
-		assert.deepEqual(await as(other, () => m.campaigns.getCampaignTips(failed)), { tips: [] });
-		assert.equal((await load(other, failed)).draftReview, undefined);
-		answer = "clean";
 		const checked = openaiRequests.length;
-		assert.deepEqual(await as(other, () => m.campaigns.sendCampaign(failed, {})), { ok: true });
-		assert.deepEqual(paths(checked), ["/moderations", "/responses"]);
-		assert.equal((await load(other, failed)).review.outcome, "allow");
+		assert.deepEqual(await as(other, () => m.campaigns.sendCampaign(failed, { checkTips: true })), { ok: true });
+		assert.deepEqual(paths(checked), ["/moderations", "/responses"], "tried once");
+		assert.equal((await load(other, failed)).review.outcome, "error");
 	});
 
-	test("a send's check that failed gives way to the review step's of the same content", async () => {
+	test("a send's check that failed gives way to one kept before for the same content", async () => {
 		answer = "phishing";
 		const user = await customer("tips-after-failure@example.com");
 		const id = await draft(user, "Your account", "<p>Log in to keep your account.</p>");
-		await as(user, () => m.campaigns.getCampaignTips(id));
+		await tipsApi(user, id);
 		const { hash } = (await load(user, id)).draftReview;
 		await m.Campaign.updateOne({ accountId: user.accountId, _id: id }, { $set: { review: { hash, outcome: "error", checkedAt: new Date() } } });
 		const requestsBefore = openaiRequests.length;
@@ -609,34 +680,42 @@ describe("tips at the review step", () => {
 		assert.equal(openaiRequests.length, requestsBefore);
 	});
 
-	test("only a draft that goes by email, from an account that can send, is read: web only, sent, another account's, no plan or no key", async () => {
+	test("the API stops for them with checkTips, and get_campaign_tips reads without sending, for a draft by email of its own account with a plan", async () => {
 		answer = "tips";
 		const user = await customer("tips-api@example.com");
 		const stranger = await customer("tips-stranger@example.com");
 		const id = await draft(user, "FREE GIFT INSIDE!!!");
+		const requestsBefore = openaiRequests.length;
+		const stopped = await callApi("POST", `/api/v1/campaigns/${id}/send`, { key: user.key, body: { checkTips: true } });
+		assert.equal(stopped.status, 200, JSON.stringify(stopped.body));
+		assert.deepEqual([stopped.body.status, stopped.body.tips], ["draft", [CAPITALS_TIP]]);
+		assert.deepEqual((await tipsApi(user, id)).body, { checked: true, tips: [CAPITALS_TIP] });
+		assert.equal(openaiRequests.length, requestsBefore + 2);
 		assert.equal((await tipsApi(stranger, id)).status, 404);
 
 		await m.Newsletter.updateOne({ accountId: user.accountId, _id: user.newsletterId }, { $set: { archiveEnabled: true } });
 		const web = await draft(user, "FREE GIFT INSIDE!!! Online");
 		await as(user, () => m.campaigns.setCampaignPublishTo(web, "web"));
-		const requestsBefore = openaiRequests.length;
+		const checked = openaiRequests.length;
 		assert.deepEqual((await tipsApi(user, web)).body, { checked: false, tips: [] }, "a web-only issue goes to no inbox");
 		await withEnv({ OPENAI_MODERATION_API_KEY: "", OPENAI_API_KEY: "" }, async () => {
 			assert.deepEqual((await tipsApi(user, id)).body, { checked: false, tips: [] });
 		});
-		assert.equal(openaiRequests.length, requestsBefore);
+		assert.equal(openaiRequests.length, checked);
 
 		const free = await signIn("tips-free@example.com");
 		const freeId = (await m.Campaign.create({ accountId: free.accountId, newsletterId: user.newsletterId, subject: "FREE GIFT INSIDE!!!" }))._id;
-		assert.equal((await as(free, () => m.campaigns.getCampaignTips(freeId))).code, "subscription_required");
-		assert.equal(openaiRequests.length, requestsBefore, "an account without a plan never costs a check");
+		assert.equal((await as(free, () => m.campaigns.sendCampaign(freeId, { checkTips: true }))).code, "subscription_required");
+		assert.equal(openaiRequests.length, checked, "an account without a plan never costs a check");
 
-		await as(user, () => m.campaigns.sendCampaign(id, {}));
+		const sent = await callApi("POST", `/api/v1/campaigns/${id}/send`, { key: user.key, body: {} });
+		assert.equal(sent.body.status, "sending");
+		assert.equal(sent.body.tips, undefined);
 		assert.equal((await tipsApi(user, id)).status, 409, "a campaign that went out has none");
 	});
 });
 
-describe("the content check of a newsletter's own welcome and confirmation emails", () => {
+describe("the content check of a newsletter's own welcome, confirmation and last-chance emails", () => {
 	const WELCOME = { requireConfirmation: false, welcome: { enabled: true, subject: "Welcome aboard", markdown: "Thanks for joining." } };
 	const CONFIRMATION = {
 		requireConfirmation: true,
@@ -736,6 +815,65 @@ describe("the content check of a newsletter's own welcome and confirmation email
 		const changed = await api(user, "PATCH", `/newsletters/${user.newsletterId}`, { welcome: { markdown: "Thanks for joining. Reply to say hi." } });
 		assert.equal(changed.welcome.review, null);
 		assert.equal(await signUp(user, "pal@signup-rejected.example.org"), "Welcome aboard");
+	});
+
+	const LAST_CHANCE = {
+		cleanup: { enabled: true },
+		lastChance: { subject: "Still there?", format: "rich", content: '<p>Log in to your bank to stay.</p><div data-button=""><a href="{{keep_url}}">Stay</a></div>' },
+	};
+
+	// A last-chance email to one of the newsletter's contacts, as a send's batch sends it: the subject that went out.
+	async function sendLastChance(user) {
+		const id = await draft(user);
+		await m.Campaign.updateOne({ accountId: user.accountId, _id: id }, { $set: { status: "sending" } });
+		const contact = await m.Contact.findOne({ accountId: user.accountId, newsletterId: user.newsletterId }).lean();
+		const message = await m.Message.create({
+			accountId: user.accountId,
+			campaignId: id,
+			newsletterId: user.newsletterId,
+			contactId: contact._id,
+			email: contact.email,
+			kind: "last-chance",
+		});
+		const before = sesEmails.length;
+		await m.sending.sendMessageBatch({ accountId: String(user.accountId), messageIds: [String(message._id)] });
+		return sesEmails.slice(before).find(({ to }) => [to].flat().includes(contact.email))?.subject ?? null;
+	}
+
+	test("a last-chance email it holds: cold contacts get the built-in one, its page says In review, and an approval lets it go", async () => {
+		answer = "phishing";
+		const user = await customer("cleanup-held@example.com");
+		const emailsBefore = platformEmails.length;
+		const saved = await api(user, "PATCH", `/newsletters/${user.newsletterId}`, LAST_CHANCE);
+		assert.deepEqual(saved.lastChance.review, { status: "in_review", note: null });
+		assert.equal(saved.lastChance.isCustom, true);
+		assert.ok(!JSON.stringify(saved).includes(REASON), "the API never shows the check's reasons");
+		const toAdmins = emailsTo("admin@example.com", emailsBefore);
+		assert.ok(toAdmins.some(({ subject, text }) => subject === "[MailCheap] Last-chance email held for review" && text.includes(`/admin/newsletters/${user.newsletterId}`)));
+		assert.equal(await sendLastChance(user), "Do you still want cleanup-held news?", "the built-in one goes out");
+
+		const CleanupPage = (await import("../app/(app)/newsletters/cleanup/page.js")).default;
+		const page = renderToStaticMarkup(await as(user, () => CleanupPage()));
+		assert.ok(page.includes("In review: a person at MailCheap checks this email before it goes out"), "its page says so");
+		assert.ok(page.includes('name="lastChanceSubject"') && page.includes("Still there?"), "with the email to change it");
+		assert.ok(!page.includes(REASON), "never why");
+
+		assert.deepEqual(await as(admin, () => m.admin.approveSignupEmail(user.newsletterId, "lastChance")), { ok: true });
+		assert.equal((await loadReviews(user)).lastChance.decision, "approved");
+		assert.equal(await sendLastChance(user), "Still there?", "its own goes out once approved");
+	});
+
+	test("a last-chance email saved while the cleanup is off is checked once it's on, before it goes out", async () => {
+		answer = "clean";
+		const user = await customer("cleanup-later@example.com");
+		await m.Newsletter.updateOne({ accountId: user.accountId, _id: user.newsletterId }, { $set: { lastChance: { subject: "Still there?", format: "rich", html: LAST_CHANCE.lastChance.content } } });
+		const requestsBefore = openaiRequests.length;
+		assert.equal((await api(user, "GET", `/newsletters/${user.newsletterId}`)).lastChance.review, null);
+		assert.equal(openaiRequests.length, requestsBefore, "reading checks nothing, and the cleanup is off");
+		await m.Newsletter.updateOne({ accountId: user.accountId, _id: user.newsletterId }, { $set: { "cleanup.enabled": true } });
+		assert.equal(await sendLastChance(user), "Still there?");
+		assert.equal(openaiRequests.length - requestsBefore, 2, "checked once, before it went out");
+		assert.equal((await loadReviews(user)).lastChance.outcome, "allow");
 	});
 
 	test("one saved before the check is checked before it first goes out", async () => {

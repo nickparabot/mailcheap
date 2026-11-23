@@ -5,49 +5,52 @@ import {
 	Ban,
 	ChevronLeft,
 	ChevronRight,
-	Clock,
-	Mail,
+	History,
 	MailCheck,
-	MailOpen,
 	MailX,
 	Moon,
-	MousePointerClick,
-	Send,
 	ShieldAlert,
+	Tags as TagsIcon,
 	UserCheck,
 	UserPlus,
+	UserRound,
 	UserX,
 } from "lucide-react";
 import AvatarContact from "@/components/AvatarContact";
 import AvatarNewsletter from "@/components/AvatarNewsletter";
 import BadgeStatus from "@/components/BadgeStatus";
+import ButtonAddField from "@/components/ButtonAddField";
 import ButtonCopy from "@/components/ButtonCopy";
-import ButtonDeleteContact from "@/components/ButtonDeleteContact";
 import ButtonEditContact from "@/components/ButtonEditContact";
+import ButtonEditTags from "@/components/ButtonEditTags";
+import ButtonMergeTag from "@/components/ButtonMergeTag";
+import CardLocation from "@/components/CardLocation";
 import CardSettings from "@/components/CardSettings";
 import CardStat from "@/components/CardStat";
+import { EMAIL_OUTCOME_LOOKS, ICON_TONES } from "@/components/IconEmailOutcome";
 import ImageFavicon from "@/components/ImageFavicon";
-import ImageFlag from "@/components/ImageFlag";
-import LinkHelp from "@/components/LinkHelp";
+import LinkHelpFields from "@/components/LinkHelpFields";
+import LinkHelpTags from "@/components/LinkHelpTags";
+import MenuContactMore from "@/components/MenuContactMore";
 import MenuContactStatus from "@/components/MenuContactStatus";
 import ProviderContactOptions from "@/components/ProviderContactOptions";
+import TabsPage, { PanelTab } from "@/components/TabsPage";
 import TextEmpty from "@/components/TextEmpty";
 import { Button } from "@/components/ui/button";
 import { scoped } from "@/lib/account-scope";
 import { countContactEmails, listContactEmails } from "@/lib/contact-emails";
-import { contactFieldValues } from "@/lib/contact-fields";
+import { MAX_CONTACT_FIELDS, contactFieldValues } from "@/lib/contact-fields";
 import { getContactHistory } from "@/lib/contact-history";
 import { UNDELIVERABLE_LABELS } from "@/lib/contact-status";
 import { listContactTags } from "@/lib/contacts";
-import { getCountryName } from "@/lib/countries";
 import { formatDate, formatDateTime, formatNumber, formatRate, formatRelative } from "@/lib/format";
 import { gravatarHash } from "@/lib/gravatar";
 import { formatLinkUrl } from "@/lib/link-stats";
-import { fillSubject } from "@/lib/merge-tags";
+import { fieldTag, fillSubject, firstNameTag } from "@/lib/merge-tags";
 import { PROVIDER_DOMAINS, PROVIDER_LABELS, mailboxProvider } from "@/lib/providers";
 import { rootDomain } from "@/lib/root-domain";
 import { findContactSegments, listLiveSegments } from "@/lib/segment-queries";
-import { getSelectedNewsletter, openNewsletter } from "@/lib/selected-newsletter";
+import { findInNewsletters, getSelectedNewsletter, openNewsletter } from "@/lib/selected-newsletter";
 import { TIME_ZONE_COOKIE, resolveTimeZone } from "@/lib/time-zone";
 import { cn } from "@/lib/utils";
 import { isObjectIdString } from "@/lib/validation";
@@ -60,15 +63,17 @@ export const metadata = { title: "Contact" };
 const EMAILS_STEP = 30;
 const MAX_EMAILS = 600;
 
-// One contact: who they are, how they read, every email they got and what they did with it, among the rest of their
-// history, and their details, segments and other newsletters. Its newsletter opens with it, like a campaign's.
+// One contact: who they are, where and how they read, then in tabs every email they got and what they did with it among
+// the rest of their history, where they came from with their segments and other newsletters, and their fields and tags.
+// Its newsletter opens with it, like a campaign's.
 export default async function ContactPage({ params, searchParams }) {
 	const [{ id }, query, view, cookieStore] = await Promise.all([params, searchParams, getSelectedNewsletter(), cookies()]);
 	if (!isObjectIdString(id)) notFound();
 	const { account, newsletters } = view;
-	const contact = await Contact.findOne(scoped(account, { _id: id })).lean();
+	const contact = await findInNewsletters(view, Contact, id);
 	if (!contact) notFound();
 	openNewsletter(view, contact.newsletterId, `/contacts/${id}`);
+	if (!contact.newsletterId.equals(view.selected._id)) notFound();
 
 	const timeZone = resolveTimeZone(cookieStore.get(TIME_ZONE_COOKIE)?.value);
 	const limit = Math.min(MAX_EMAILS, Math.max(EMAILS_STEP, Number.parseInt(query.emails, 10) || EMAILS_STEP));
@@ -85,7 +90,6 @@ export default async function ContactPage({ params, searchParams }) {
 	]);
 
 	const name = contact.firstName || null;
-	const countryName = getCountryName(contact.country);
 	const inbox = getInbox(contact.email);
 	const values = contactFieldValues(contact, fields);
 	const details = { id, email: contact.email, firstName: contact.firstName ?? "", tags: contact.tags ?? [], fields: values };
@@ -96,197 +100,254 @@ export default async function ContactPage({ params, searchParams }) {
 
 	return (
 		<ProviderContactOptions fields={fields} tags={tags}>
-			<header className="mb-8 flex flex-col gap-4 animate-enter">
-				<div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-3">
-					<div className="flex min-w-0 items-center gap-2">
-						<Link
-							href="/contacts"
-							aria-label="Back"
-							className="-ml-2 grid size-9 shrink-0 place-items-center rounded-lg text-muted-foreground transition-colors duration-150 hover:bg-muted hover:text-foreground"
-						>
-							<ChevronLeft className="size-5" />
-						</Link>
-						<AvatarContact email={contact.email} gravatarHash={gravatarHash(contact.email)} size={56} />
-						<div className="ml-2 flex min-w-0 flex-col gap-0.5">
-							<div className="flex min-w-0 items-center gap-1">
-								<h1 className="truncate text-2xl font-semibold tracking-tight">{name ?? contact.email}</h1>
-								{!name && <ButtonCopy value={contact.email} label="Copy email address" />}
-							</div>
-							{name && (
-								<p className="flex min-w-0 items-center gap-1 text-sm text-muted-foreground">
-									<span className="truncate">{contact.email}</span>
-									<ButtonCopy value={contact.email} label="Copy email address" />
-								</p>
-							)}
+			<header className="mb-6 flex flex-wrap items-center gap-x-2 gap-y-4 animate-enter">
+				<div className="flex min-w-0 flex-1 items-center gap-2 sm:mr-auto sm:flex-initial sm:pr-4">
+					<Link
+						href="/contacts"
+						aria-label="Back"
+						className="-ml-2 grid size-9 shrink-0 place-items-center rounded-lg text-muted-foreground transition-colors duration-150 hover:bg-muted hover:text-foreground"
+					>
+						<ChevronLeft className="size-5" />
+					</Link>
+					<AvatarContact email={contact.email} gravatarHash={gravatarHash(contact.email)} size={56} />
+					<div className="ml-2 flex min-w-0 flex-col gap-0.5">
+						<div className="flex min-w-0 items-center gap-1">
+							<h1 className="truncate text-2xl font-semibold tracking-tight">{name ?? contact.email}</h1>
+							{!name && <ButtonCopy value={contact.email} label="Copy email address" />}
 						</div>
-					</div>
-					<div className="flex items-center gap-2">
-						<ButtonEditContact contact={details} />
-						<ButtonDeleteContact id={id} email={contact.email} status={contact.status} />
+						{name && (
+							<p className="flex min-w-0 items-center gap-1 text-sm text-muted-foreground">
+								<span className="truncate">{contact.email}</span>
+								<ButtonCopy value={contact.email} label="Copy email address" />
+							</p>
+						)}
 					</div>
 				</div>
-				<ul className="flex flex-wrap items-center gap-x-5 gap-y-2 text-sm text-muted-foreground">
-					<li>
-						<MenuContactStatus
-							id={id}
-							email={contact.email}
-							status={contact.status}
-							label={contact.undeliverableAt && (UNDELIVERABLE_LABELS[contact.undeliverableReason] ?? "Undeliverable")}
-							undeliverableReason={contact.undeliverableReason}
-						/>
-					</li>
-					{countryName && (
-						<li className="flex items-center gap-2">
-							<ImageFlag country={contact.country} />
-							{countryName}
-						</li>
-					)}
-					<li className="flex min-w-0 items-center gap-2">
-						<ImageFavicon domain={inbox.domain} size={16} />
-						<span className="truncate">{inbox.label}</span>
-					</li>
-					<li>Subscribed {formatDate(contact.subscribedAt, timeZone)}</li>
-				</ul>
+				<div className="flex basis-full max-sm:order-2 sm:basis-auto">
+					<MenuContactStatus
+						id={id}
+						email={contact.email}
+						status={contact.status}
+						label={contact.undeliverableAt && (UNDELIVERABLE_LABELS[contact.undeliverableReason] ?? "Undeliverable")}
+						undeliverableReason={contact.undeliverableReason}
+					/>
+				</div>
+				{/* On a phone, next to the name, above their status. */}
+				<MenuContactMore contact={details} status={contact.status} className="max-sm:order-1" />
 			</header>
 
 			<div className="flex flex-col gap-6">
-				<div style={{ "--stagger": 1 }} className="grid grid-cols-2 gap-3 animate-enter lg:grid-cols-4">
-					<CardStat
-						label="Emails received"
-						value={formatNumber(counts.sent)}
-						detail={contact.lastSentAt ? `Last on ${formatDate(contact.lastSentAt, timeZone)}` : "None yet"}
-					/>
-					<CardStat label="Opened" {...getRateCard(counts.opened, counts.sent, contact.imported?.openRate)} />
-					<CardStat label="Clicked" {...getRateCard(counts.clicked, counts.sent, contact.imported?.clickRate)} />
-					<CardStat
-						label="Last opened"
-						value={formatRelative(contact.lastOpenAt)}
-						detail={formatDate(contact.lastOpenAt, timeZone) ?? "Never"}
-					/>
+				<div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
+					<CardLocation country={contact.country} source={contact.source} stagger={1} />
+					<div style={{ "--stagger": 2 }} className="grid grid-cols-2 gap-3 animate-enter md:grid-cols-4 lg:grid-cols-2">
+						<CardStat
+							label="Emails received"
+							value={formatNumber(counts.sent)}
+							detail={contact.lastSentAt ? `Last on ${formatDate(contact.lastSentAt, timeZone)}` : "None yet"}
+						/>
+						<CardStat label="Opened" {...getRateCard(counts.opened, counts.sent, contact.imported?.openRate)} />
+						<CardStat label="Clicked" {...getRateCard(counts.clicked, counts.sent, contact.imported?.clickRate)} />
+						<CardStat
+							label="Last opened"
+							value={formatRelative(contact.lastOpenAt)}
+							detail={formatDate(contact.lastOpenAt, timeZone) ?? "Never"}
+						/>
+					</div>
 				</div>
 
-				<div className="grid items-start gap-6 lg:grid-cols-[minmax(0,1fr)_20rem]">
-					<aside className="flex flex-col gap-6 lg:order-last">
+				<TabsPage tabs={CONTACT_TABS} style={{ "--stagger": 3 }}>
+					<PanelTab value="activity">
+						<section aria-label="Activity" className="rounded-xl bg-card shadow-border">
+							<ol className="flex flex-col p-4">
+								{timeline.map((item) =>
+									item.email ? (
+										<ItemEmail
+											key={item.key}
+											email={item.email}
+											contact={contact}
+											contactFields={account.contactFields}
+											timeZone={timeZone}
+										/>
+									) : (
+										<ItemEvent key={item.key} event={item.event} source={source} timeZone={timeZone} />
+									)
+								)}
+							</ol>
+							{nextCursor && (
+								<div className="border-t border-border/60 p-2">
+									<Button asChild variant="ghost" className="w-full text-muted-foreground">
+										<Link href={`/contacts/${id}?emails=${limit + EMAILS_STEP}`} scroll={false}>
+											Show older emails
+										</Link>
+									</Button>
+								</div>
+							)}
+						</section>
+					</PanelTab>
+
+					<PanelTab value="about" className="flex flex-col gap-4">
+						<section aria-label="About" className="rounded-xl bg-card p-4 shadow-border sm:p-5">
+							<dl className="grid grid-cols-1 gap-x-6 gap-y-5 sm:grid-cols-2 lg:grid-cols-3">
+								<Property label="Subscribed">{formatDate(contact.subscribedAt, timeZone)}</Property>
+								<Property label="Source">
+									<TextSource contact={source} />
+								</Property>
+								<Property label="Email provider">
+									<span className="flex min-w-0 items-center gap-1.5">
+										<ImageFavicon domain={inbox.domain} size={14} />
+										<span className="truncate">{inbox.label}</span>
+									</span>
+								</Property>
+								{contact.confirmedAt && <Property label="Confirmed">{formatDate(contact.confirmedAt, timeZone)}</Property>}
+								<Property label="Last click">{formatDate(contact.lastClickAt, timeZone) ?? <TextEmpty label="Never" />}</Property>
+								{hasImportedNumbers(contact.imported) && <Property label="Before MailCheap">{describeImported(contact.imported)}</Property>}
+							</dl>
+						</section>
+
+						{(segments.hasAny || otherNewsletters.length > 0) && (
+							<div className="grid grid-cols-1 items-start gap-4 md:grid-cols-2">
+								{segments.hasAny && (
+									<CardSettings title="Segments">
+										{segments.matched.length > 0 ? (
+											segments.matched.map((segment) => (
+												<RowLink key={String(segment._id)} href={`/contacts/segments/${segment._id}`}>
+													<span className="truncate">{segment.name}</span>
+												</RowLink>
+											))
+										) : (
+											<p className="px-4 py-3 text-sm text-muted-foreground">In none of your segments</p>
+										)}
+									</CardSettings>
+								)}
+								{otherNewsletters.length > 0 && (
+									<CardSettings title="Other newsletters">
+										{otherNewsletters.map((other) => {
+											const newsletter = byNewsletter.get(String(other.newsletterId));
+											return (
+												<RowLink key={String(other._id)} href={`/contacts/${other._id}`}>
+													<span className="flex min-w-0 items-center gap-2">
+														<AvatarNewsletter newsletter={newsletter} size={18} />
+														<span className="truncate">{newsletter.name}</span>
+													</span>
+													<BadgeStatus status={other.status} className="ml-auto" />
+												</RowLink>
+											);
+										})}
+									</CardSettings>
+								)}
+							</div>
+						)}
+					</PanelTab>
+
+					<PanelTab value="fields" className="grid grid-cols-1 items-start gap-4 lg:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]">
 						<CardSettings
-							title="Details"
-							stagger={2}
+							title="Fields"
 							action={
 								<ButtonEditContact contact={details} variant="ghost" size="sm">
 									Edit
 								</ButtonEditContact>
 							}
 						>
-							<RowFact label="First name">{name ?? <TextEmpty />}</RowFact>
-							{fields.map((field) => (
-								<RowFact key={field.key} label={field.label}>
-									{formatFieldValue(field, values[field.key]) ?? <TextEmpty />}
-								</RowFact>
-							))}
-							<RowFact label="Tags">
+							<dl className="grid grid-cols-1 gap-x-6 gap-y-5 p-4 sm:grid-cols-2">
+								<PropertyField label="First name" tag={firstNameTag("")}>
+									{name ?? <TextEmpty />}
+								</PropertyField>
+								{fields.map((field) => (
+									<PropertyField key={field.key} label={field.label} tag={fieldTag(field.key)}>
+										<TextFieldValue field={field} value={values[field.key]} />
+									</PropertyField>
+								))}
+							</dl>
+							<div className="flex flex-col items-start gap-2.5 px-4 py-3">
+								<p className="text-xs text-pretty text-muted-foreground">
+									Type a field between double braces in an email, like {firstNameTag("")}, to print each reader&apos;s value.
+									Fields you add, like a company, are on every contact.
+								</p>
+								<div className="-ml-2.5 flex flex-wrap items-center gap-x-4 gap-y-1">
+									{fields.length < MAX_CONTACT_FIELDS && <ButtonAddField />}
+									<LinkHelpFields className="ml-2.5" />
+								</div>
+							</div>
+						</CardSettings>
+
+						<CardSettings
+							title="Tags"
+							action={
+								<ButtonEditTags contact={details} variant="ghost" size="sm">
+									Edit
+								</ButtonEditTags>
+							}
+						>
+							<div className="p-4">
 								{details.tags.length > 0 ? (
-									<span className="flex flex-wrap justify-end gap-1">
+									<span className="flex flex-wrap gap-1.5">
 										{details.tags.map((tag) => (
 											<Link
 												key={tag}
 												href={`/contacts?tag=${encodeURIComponent(tag)}`}
-												className="inline-flex h-5 max-w-full items-center rounded-md bg-muted px-1.5 text-xs text-muted-foreground transition-colors duration-150 hover:text-foreground"
+												className="inline-flex h-6 max-w-full items-center rounded-md bg-muted px-2 text-xs text-muted-foreground transition-colors duration-150 hover:text-foreground"
 											>
 												<span className="truncate">{tag}</span>
 											</Link>
 										))}
 									</span>
 								) : (
-									<TextEmpty />
+									<p className="text-sm text-muted-foreground">No tags yet</p>
 								)}
-							</RowFact>
-							<p className="px-4 py-3 text-xs text-pretty text-muted-foreground">
-								Tags are labels to filter and pick contacts by. Fields hold your own values, like a company.{" "}
-								<LinkHelp article="contacts" section="details" />
-							</p>
-						</CardSettings>
-
-						<CardSettings title="About" stagger={3}>
-							<RowFact label="Source">
-								<TextSource contact={source} />
-							</RowFact>
-							{contact.confirmedAt && <RowFact label="Confirmed">{formatDate(contact.confirmedAt, timeZone)}</RowFact>}
-							<RowFact label="Last click">{formatDate(contact.lastClickAt, timeZone) ?? <TextEmpty label="Never" />}</RowFact>
-							{hasImportedNumbers(contact.imported) && (
-								<RowFact label="Before MailCheap">{describeImported(contact.imported)}</RowFact>
-							)}
-						</CardSettings>
-
-						{segments.hasAny && (
-							<CardSettings title="Segments" stagger={4}>
-								{segments.matched.length > 0 ? (
-									segments.matched.map((segment) => (
-										<RowLink key={String(segment._id)} href={`/contacts?segment=${segment._id}`}>
-											<span className="truncate">{segment.name}</span>
-										</RowLink>
-									))
-								) : (
-									<p className="px-4 py-3 text-sm text-muted-foreground">In none of your segments</p>
-								)}
-							</CardSettings>
-						)}
-
-						{otherNewsletters.length > 0 && (
-							<CardSettings title="Other newsletters" stagger={5}>
-								{otherNewsletters.map((other) => {
-									const newsletter = byNewsletter.get(String(other.newsletterId));
-									return (
-										<RowLink key={String(other._id)} href={`/contacts/${other._id}`}>
-											<span className="flex min-w-0 items-center gap-2">
-												<AvatarNewsletter newsletter={newsletter} size={18} />
-												<span className="truncate">{newsletter.name}</span>
-											</span>
-											<BadgeStatus status={other.status} className="ml-auto" />
-										</RowLink>
-									);
-								})}
-							</CardSettings>
-						)}
-					</aside>
-
-					<section style={{ "--stagger": 2 }} className="rounded-xl bg-card shadow-border animate-enter">
-						<h2 className="flex h-12 items-center px-4 text-sm font-medium">Activity</h2>
-						<ol className="flex flex-col border-t border-border/60 p-4">
-							{timeline.map((item) =>
-								item.email ? (
-									<ItemEmail
-										key={item.key}
-										email={item.email}
-										contact={contact}
-										contactFields={account.contactFields}
-										timeZone={timeZone}
-									/>
-								) : (
-									<ItemEvent key={item.key} event={item.event} source={source} timeZone={timeZone} />
-								)
-							)}
-						</ol>
-						{nextCursor && (
-							<div className="border-t border-border/60 p-2">
-								<Button asChild variant="ghost" className="w-full text-muted-foreground">
-									<Link href={`/contacts/${id}?emails=${limit + EMAILS_STEP}`} scroll={false}>
-										Show older emails
-									</Link>
-								</Button>
 							</div>
-						)}
-					</section>
-				</div>
+							<div className="flex flex-col items-start gap-2.5 px-4 py-3">
+								<p className="text-xs text-pretty text-muted-foreground">
+									Tags sort contacts for your list and segments. They never show in emails.
+								</p>
+								<LinkHelpTags />
+							</div>
+						</CardSettings>
+					</PanelTab>
+				</TabsPage>
 			</div>
 		</ProviderContactOptions>
 	);
 }
 
-function RowFact({ label, children }) {
+function Property({ label, children }) {
 	return (
-		<div className="flex items-start justify-between gap-4 px-4 py-2.5 text-sm">
-			<span className="shrink-0 text-muted-foreground">{label}</span>
-			<span className="flex min-h-5 min-w-0 items-center justify-end text-right break-words">{children}</span>
+		<div className="flex min-w-0 flex-col gap-1">
+			<dt className="text-xs text-muted-foreground">{label}</dt>
+			<dd className="flex min-h-5 min-w-0 items-center text-sm break-words">{children}</dd>
 		</div>
+	);
+}
+
+// A field's name and the contact's value, over the tag that prints it in emails.
+function PropertyField({ label, tag, children }) {
+	return (
+		<div className="flex min-w-0 flex-col gap-1">
+			<dt className="text-xs text-muted-foreground">{label}</dt>
+			<dd className="flex min-w-0 flex-col items-start gap-2 text-sm">
+				<span className="flex min-h-5 max-w-full min-w-0 items-center break-words">{children}</span>
+				<ButtonMergeTag tag={tag} className="max-w-full -translate-x-px" />
+			</dd>
+		</div>
+	);
+}
+
+// A value as the contact's page shows it: a link with its site's icon for a web address.
+function TextFieldValue({ field, value }) {
+	const text = formatFieldValue(field, value);
+	if (text === null) return <TextEmpty />;
+	const host = field.type === "text" && /^https?:\/\//i.test(text) ? hostOf(text) : null;
+	if (!host) return text;
+	return (
+		<a
+			href={text}
+			target="_blank"
+			rel="noopener noreferrer"
+			title={text}
+			className="flex min-w-0 items-center gap-1.5 underline decoration-foreground/20 underline-offset-4 transition-colors duration-150 hover:decoration-foreground/60"
+		>
+			<ImageFavicon domain={host} size={14} />
+			<span className="truncate">{formatLinkUrl(text)}</span>
+		</a>
 	);
 }
 
@@ -337,14 +398,14 @@ function ItemTimeline({ icon: Icon, tone = "muted", title, at, before = null, ti
 // An email, by what it came to: the furthest of delivered, opened and clicked, or what stopped it. Its subject shows as
 // they got it, with their first name and field values.
 function ItemEmail({ email, contact, contactFields, timeZone }) {
-	const outcome = getOutcome(email);
-	const { verb, icon, tone } = OUTCOMES[outcome];
+	const { outcome } = email;
+	const { verb, icon, tone } = EMAIL_OUTCOME_LOOKS[outcome];
 	const links = email.clickedLinks.filter((url) => /^https?:\/\//i.test(url));
 	const moments = [
 		email.openedAt && `Opened ${formatMoment(email.openedAt, timeZone)}`,
 		email.clickedAt && `Clicked ${formatMoment(email.clickedAt, timeZone)}`,
 	].filter(Boolean);
-	const note = outcome === "unsent" ? UNSENT_REASONS[email.status] : outcome === "waiting" ? "Waiting to go out" : moments.join(" · ");
+	const note = OUTCOME_NOTES[outcome] ?? (outcome === "unsent" ? UNSENT_REASONS[email.status] : moments.join(" · "));
 
 	return (
 		<ItemTimeline
@@ -429,16 +490,6 @@ function getTimeline({ emails, hasMore, history }) {
 			.filter(({ at }) => new Date(at).getTime() >= oldest)
 			.map((event, index) => ({ key: `${event.type}-${index}`, at: event.at, event })),
 	].toSorted((a, b) => new Date(b.at).getTime() - new Date(a.at).getTime());
-}
-
-function getOutcome(email) {
-	if (email.complainedAt || email.status === "complained") return "complained";
-	if (email.bouncedAt || email.status === "bounced") return "bounced";
-	if (email.clickedAt) return "clicked";
-	if (email.openedAt) return "opened";
-	if (email.deliveredAt || email.status === "delivered") return "delivered";
-	if (email.sentAt || email.status === "sent") return "sent";
-	return ["held", "queued"].includes(email.status) ? "waiting" : "unsent";
 }
 
 function describeEvent(event, contact) {
@@ -544,24 +595,13 @@ function formatMoment(value, timeZone) {
 	return new Date(value).toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit", timeZone });
 }
 
-const ICON_TONES = {
-	muted: "bg-muted text-muted-foreground",
-	green: "bg-emerald-500/12 text-emerald-600 dark:text-emerald-400",
-	blue: "bg-sky-500/12 text-sky-600 dark:text-sky-400",
-	amber: "bg-amber-500/12 text-amber-600 dark:text-amber-400",
-	red: "bg-red-500/10 text-red-600 dark:text-red-400",
-};
+const CONTACT_TABS = [
+	{ value: "activity", icon: History, label: "Activity" },
+	{ value: "about", icon: UserRound, label: "About" },
+	{ value: "fields", icon: TagsIcon, label: "Fields and tags" },
+];
 
-const OUTCOMES = {
-	complained: { verb: "Marked as spam", icon: ShieldAlert, tone: "red" },
-	bounced: { verb: "Bounced", icon: MailX, tone: "red" },
-	clicked: { verb: "Clicked", icon: MousePointerClick, tone: "green" },
-	opened: { verb: "Opened", icon: MailOpen, tone: "blue" },
-	delivered: { verb: "Received", icon: Mail, tone: "muted" },
-	sent: { verb: "Sent", icon: Send, tone: "muted" },
-	waiting: { verb: "Sending", icon: Clock, tone: "muted" },
-	unsent: { verb: "Not sent", icon: Ban, tone: "muted" },
-};
+const OUTCOME_NOTES = { waiting: "Waiting to go out", undelivered: "It never reached their inbox" };
 
 const UNSENT_REASONS = {
 	failed: "It couldn't be sent",

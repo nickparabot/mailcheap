@@ -26,6 +26,8 @@ const PRICES = {
 	mailcheap_pro_yearly: price("mailcheap_pro_yearly", 79_000, "year"),
 	mailcheap_max_monthly: price("mailcheap_max_monthly", 34_900, "month"),
 	mailcheap_max_yearly: price("mailcheap_max_yearly", 349_000, "year"),
+	mailcheap_ultra_monthly: price("mailcheap_ultra_monthly", 79_900, "month"),
+	mailcheap_ultra_yearly: price("mailcheap_ultra_yearly", 799_000, "year"),
 };
 
 function subscription({ id, accountId, customer, status = "active", lookupKey = "mailcheap_starter_monthly", start = NOW, end = NOW + 30 * DAY, ...rest }) {
@@ -192,18 +194,20 @@ describe("checkout", () => {
 		assert.equal(calls.some(({ path }) => path === "/v1/checkout/sessions"), false);
 		assert.deepEqual(
 			(await m.stripe.findPlansOnSale()).map(({ id }) => id),
-			["starter", "growth", "max"]
+			["starter", "growth", "max", "ultra"]
 		);
 	});
 
-	test("Max opens Checkout with its own prices, like any plan on sale", async () => {
+	test("Max and Ultra open Checkout with their own prices, like any plan on sale", async () => {
 		const user = await signIn("max-checkout@example.com");
-		for (const [interval, lookupKey] of [
-			["year", "mailcheap_max_yearly"],
-			["month", "mailcheap_max_monthly"],
-		]) {
-			assert.equal(await as(user, () => catchRedirect(m.billing.choosePlan(form({ plan: "max", interval })))), "https://checkout.stripe.com/c/pay/cs_test_1");
-			assert.equal(calls.findLast(({ path }) => path === "/v1/checkout/sessions").body.get("line_items[0][price]"), `price_${lookupKey}`);
+		for (const plan of ["max", "ultra"]) {
+			for (const [interval, period] of [
+				["year", "yearly"],
+				["month", "monthly"],
+			]) {
+				assert.equal(await as(user, () => catchRedirect(m.billing.choosePlan(form({ plan, interval })))), "https://checkout.stripe.com/c/pay/cs_test_1");
+				assert.equal(calls.findLast(({ path }) => path === "/v1/checkout/sessions").body.get("line_items[0][price]"), `price_mailcheap_${plan}_${period}`);
+			}
 		}
 	});
 
@@ -339,24 +343,31 @@ describe("subscription changes", () => {
 	});
 });
 
-describe("Max", () => {
-	test("a subscription to Max's prices gives the account Max and its limits, and get_billing says so", async () => {
-		const user = await signIn("max-webhook@example.com");
-		subscriptions.set("sub_max", subscription({ id: "sub_max", accountId: user.accountId, customer: "cus_max", lookupKey: "mailcheap_max_yearly", end: NOW + 365 * DAY }));
-		assert.deepEqual(await deliver("customer.subscription.created", { id: "sub_max" }), { status: 200, body: { received: true, updated: true, status: "active" } });
+describe("Max and Ultra", () => {
+	for (const [plan, name, yearlyPrice, emails, subscribers] of [
+		["max", "Max", 3490, 2_000_000, 1_000_000],
+		["ultra", "Ultra", 7990, 5_000_000, 2_500_000],
+	]) {
+		test(`a subscription to ${name}'s prices gives the account ${name} and its limits, and get_billing says so`, async () => {
+			const user = await signIn(`${plan}-webhook@example.com`);
+			const id = `sub_${plan}`;
+			const customer = `cus_${plan}`;
+			subscriptions.set(id, subscription({ id, accountId: user.accountId, customer, lookupKey: `mailcheap_${plan}_yearly`, end: NOW + 365 * DAY }));
+			assert.deepEqual(await deliver("customer.subscription.created", { id }), { status: 200, body: { received: true, updated: true, status: "active" } });
 
-		const paid = await account(user);
-		assert.deepEqual([paid.plan, paid.interval, paid.subscriptionStatus], ["max", "year", "active"]);
-		assert.deepEqual(m.plans.getAccountLimits(paid), { emails: 2_000_000, subscribers: 1_000_000 });
-		const { key } = await createKey(user, "Max");
-		const billing = await callApi("GET", "/api/v1/billing", { key });
-		assert.deepEqual(billing.body.plan, { id: "max", name: "Max", interval: "year", price: 3490 });
-		assert.deepEqual([billing.body.usage.emailsLimit, billing.body.usage.subscribersLimit], [2_000_000, 1_000_000]);
+			const paid = await account(user);
+			assert.deepEqual([paid.plan, paid.interval, paid.subscriptionStatus], [plan, "year", "active"]);
+			assert.deepEqual(m.plans.getAccountLimits(paid), { emails, subscribers });
+			const { key } = await createKey(user, name);
+			const billing = await callApi("GET", "/api/v1/billing", { key });
+			assert.deepEqual(billing.body.plan, { id: plan, name, interval: "year", price: yearlyPrice });
+			assert.deepEqual([billing.body.usage.emailsLimit, billing.body.usage.subscribersLimit], [emails, subscribers]);
 
-		subscriptions.set("sub_max", subscription({ id: "sub_max", accountId: user.accountId, customer: "cus_max", lookupKey: "mailcheap_growth_monthly" }));
-		await deliver("customer.subscription.updated", { id: "sub_max" });
-		assert.equal((await account(user)).plan, "growth", "and a change away from it too");
-	});
+			subscriptions.set(id, subscription({ id, accountId: user.accountId, customer, lookupKey: "mailcheap_growth_monthly" }));
+			await deliver("customer.subscription.updated", { id });
+			assert.equal((await account(user)).plan, "growth", "and a change away from it too");
+		});
+	}
 });
 
 describe("invoice.paid", () => {
@@ -389,6 +400,102 @@ describe("invoice.paid", () => {
 	});
 });
 
+describe("early fraud warnings", () => {
+	const charges = new Map();
+
+	function charge(id, fields = {}) {
+		charges.set(id, { id, object: "charge", amount: 1900, amount_refunded: 0, refunded: false, disputed: false, customer: "cus_efw", payment_intent: `pi_${id}`, ...fields });
+	}
+
+	function warning(chargeId) {
+		return { id: `issfr_${chargeId}`, object: "radar.early_fraud_warning", actionable: true, charge: chargeId, fraud_type: "made_with_stolen_card", livemode: false };
+	}
+
+	// Charges, their refunds, and which invoice of sub_efw each paid: only ch_paid paid one.
+	function fraudApi(request) {
+		const { method, path, query } = request;
+		const record = (answer) => {
+			calls.push(request);
+			return answer;
+		};
+		if (method === "GET" && path.startsWith("/v1/charges/")) return record(charges.get(path.split("/").at(-1)));
+		if (method === "POST" && path === "/v1/refunds") {
+			const refunded = charges.get(request.body.get("charge"));
+			charges.set(refunded.id, { ...refunded, refunded: true, amount_refunded: refunded.amount });
+			return record({ id: "re_1", object: "refund", charge: refunded.id, status: "succeeded" });
+		}
+		if (method === "GET" && path === "/v1/invoice_payments") {
+			const isPaid = query.get("payment[type]") === "payment_intent" && query.get("payment[payment_intent]") === "pi_ch_paid" && query.get("status") === "paid";
+			return record({ object: "list", data: isPaid ? [{ id: "inpay_1", object: "invoice_payment", invoice: "in_efw", status: "paid" }] : [], has_more: false });
+		}
+		if (method === "GET" && path === "/v1/invoices/in_efw") {
+			return record({ id: "in_efw", object: "invoice", parent: { type: "subscription_details", subscription_details: { subscription: "sub_efw" } } });
+		}
+		if (method === "DELETE" && path === "/v1/subscriptions/sub_efw") {
+			subscriptions.set("sub_efw", { ...subscriptions.get("sub_efw"), status: "canceled" });
+			return record(subscriptions.get("sub_efw"));
+		}
+		return stripeApi(request);
+	}
+
+	test("the payment is refunded as fraudulent, the plan it paid for ends at once, and the admins and the owner hear of it", async () => {
+		const user = await signIn("fraud@example.com");
+		subscriptions.set("sub_efw", subscription({ id: "sub_efw", accountId: user.accountId, customer: "cus_efw" }));
+		await deliver("customer.subscription.created", { id: "sub_efw" });
+		charge("ch_paid");
+		mockStripe(fraudApi);
+		const emailsBefore = platformEmails.length;
+
+		const result = await deliver("radar.early_fraud_warning.created", warning("ch_paid"));
+		assert.deepEqual(result, { status: 200, body: { received: true, refunded: true, canceled: "sub_efw" } });
+		const refund = calls.find(({ method, path }) => method === "POST" && path === "/v1/refunds");
+		assert.deepEqual([refund.body.get("charge"), refund.body.get("reason")], ["ch_paid", "fraudulent"]);
+		assert.equal(refund.headers.get("idempotency-key"), "efw-refund-issfr_ch_paid");
+		assert.ok(calls.some(({ method, path }) => method === "DELETE" && path === "/v1/subscriptions/sub_efw"));
+		await deliver("customer.subscription.deleted", { id: "sub_efw" });
+		assert.equal((await account(user)).subscriptionStatus, "canceled", "the plan is off, like any canceled one");
+
+		const emails = platformEmails.slice(emailsBefore);
+		const toAdmins = emails.find(({ to }) => to.includes("admin@example.com"));
+		assert.equal(toAdmins.subject, "[MailCheap] Payment refunded after a fraud warning");
+		assert.ok(
+			toAdmins.text.includes(
+				`Account ${user.accountId}: the card's bank reported a $19.00 payment as fraud (made_with_stolen_card), and MailCheap refunded it and ended the plan it paid for.`
+			),
+			toAdmins.text
+		);
+		const toOwner = emails.find(({ to }) => to.includes("fraud@example.com"));
+		assert.equal(toOwner.subject, "[MailCheap] Your plan ended");
+		assert.ok(
+			toOwner.text.includes("Your card's bank reported a $19.00 payment to MailCheap as unauthorized, so we refunded it and ended the plan it paid for."),
+			toOwner.text
+		);
+
+		calls = [];
+		const emailsAfter = platformEmails.length;
+		const again = await deliver("radar.early_fraud_warning.created", warning("ch_paid"));
+		assert.deepEqual(again.body, { received: true, refunded: false }, "delivered again, nothing more to do");
+		assert.equal(calls.some(({ method, path }) => path === "/v1/refunds" || method === "DELETE"), false);
+		assert.equal(platformEmails.length, emailsAfter, "and nobody is told twice");
+	});
+
+	test("a payment that paid no plan is only refunded, and a disputed one is left to the dispute", async () => {
+		const user = await signIn("fraud-other@example.com");
+		subscriptions.set("sub_other", subscription({ id: "sub_other", accountId: user.accountId, customer: "cus_other" }));
+		await deliver("customer.subscription.created", { id: "sub_other" });
+		charge("ch_loose", { amount: 500, customer: "cus_other" });
+		charge("ch_disputed", { disputed: true, customer: "cus_other" });
+		mockStripe(fraudApi);
+
+		assert.deepEqual((await deliver("radar.early_fraud_warning.created", warning("ch_loose"))).body, { received: true, refunded: true });
+		assert.equal(calls.some(({ method }) => method === "DELETE"), false, "the plan goes on");
+		calls = [];
+		assert.deepEqual((await deliver("radar.early_fraud_warning.created", warning("ch_disputed"))).body, { received: true, refunded: false });
+		assert.equal(calls.some(({ path }) => path === "/v1/refunds"), false);
+		assert.equal((await account(user)).subscriptionStatus, "active");
+	});
+});
+
 describe("customer portal", () => {
 	test("manage billing opens the portal; picking another plan opens Stripe's confirm page for it", async () => {
 		const user = await signIn("portal@example.com");
@@ -399,6 +506,7 @@ describe("customer portal", () => {
 		const portal = calls.findLast(({ path }) => path === "/v1/billing_portal/sessions").body;
 		assert.equal(portal.get("customer"), "cus_portal");
 		assert.equal(portal.get("return_url"), "http://localhost:3000/billing");
+		assert.equal(portal.get("configuration"), null, "the portal set up in Stripe's dashboard");
 
 		assert.equal(await as(user, () => catchRedirect(m.billing.choosePlan(form({ plan: "growth", interval: "month" })))), "https://billing.stripe.com/p/session/bps_1");
 		const change = calls.findLast(({ path }) => path === "/v1/billing_portal/sessions").body;

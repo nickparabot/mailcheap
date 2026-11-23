@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { after, before, beforeEach, describe, test } from "node:test";
 import mongoose from "mongoose";
-import { addVerifiedDomain, as, callApi, catchRedirect, form, jsonRequest, mockStripe, platformEmails, signIn, startTestApp, withEnv } from "./helpers/app.mjs";
+import { addAuthor, addVerifiedDomain, as, callApi, catchRedirect, form, jsonRequest, mockStripe, platformEmails, signIn, startTestApp, withEnv } from "./helpers/app.mjs";
 import { flushAfter } from "./stubs/next-server.mjs";
 import { published } from "./stubs/qstash.mjs";
 
@@ -157,9 +157,10 @@ describe("billing is off", () => {
 		const user = await signIn("sender@team.example.org");
 		await addVerifiedDomain(user, "self-hosted.dev");
 		const settings = { name: "Notes", slug: "self-notes", fromName: "Jo", fromEmail: "hello@self-hosted.dev", postalAddress: "1 Main St, Paris" };
-		const welcome = { welcomeEnabled: "on", welcomeSubject: "Welcome", welcomeMarkdown: "Thanks for joining." };
+		const welcome = { welcomeEnabled: "on", welcomeSubject: "Welcome", welcomeContent: "Thanks for joining." };
 		const url = await as(user, () => catchRedirect(m.newsletters.saveNewsletter(null, form({ ...settings, ...welcome }))));
 		const newsletterId = url.split("/").at(-1);
+		await addAuthor(user, newsletterId);
 		const rows = ["a", "b", "c"].map((name) => ({ email: `${name}@readers.example.org`, status: "active" }));
 		await as(user, () => m.contacts.importContacts({ newsletterId, consent: true, rows }));
 		await m.Account.updateOne({ _id: user.accountId }, { $set: { "usage.emailsSent": 50_000_000 } });
@@ -186,15 +187,15 @@ describe("billing is off", () => {
 		assert.equal((await m.Account.findById(user.accountId).lean()).usage.emailsSent, 50_000_004);
 	});
 
-	test("there's no warm-up: a send far over anything sent before goes out at full speed", async () => {
+	test("nothing holds Gmail's readers back: a new domain's first send goes out at full speed", async () => {
 		const user = await signIn("first-blast@team.example.org");
-		await m.Account.updateOne({ _id: user.accountId }, { $unset: { spreadUntil: 1 } });
 		await addVerifiedDomain(user, "blast.dev");
 		const settings = { name: "Blast", slug: "blast-notes", fromName: "Jo", fromEmail: "hello@blast.dev", postalAddress: "1 Main St, Paris" };
 		const newsletterId = (await as(user, () => catchRedirect(m.newsletters.saveNewsletter(null, form(settings))))).split("/").at(-1);
+		await addAuthor(user, newsletterId);
 		const lastSentAt = new Date(Date.now() - 90 * 86_400_000);
 		await m.Contact.insertMany(
-			Array.from({ length: 300 }, (_, index) => ({ accountId: user.accountId, newsletterId, email: `reader${index}@blast.example.org`, status: "active", lastSentAt }))
+			Array.from({ length: 300 }, (_, index) => ({ accountId: user.accountId, newsletterId, email: `mailcheap-test-blast-${index}@gmail.com`, status: "active", lastSentAt }))
 		);
 		const id = (await as(user, () => catchRedirect(m.campaigns.createCampaign(newsletterId)))).split("/").at(-1);
 		await as(user, () => m.campaigns.saveCampaign(id, { subject: "Issue", previewText: "This week", body: "<p>Hello</p>" }));
@@ -203,8 +204,7 @@ describe("billing is off", () => {
 		const batches = published.slice(from).filter(({ url }) => url.endsWith("/api/jobs/send-batch"));
 		assert.equal(batches.length, 6);
 		assert.ok(batches.every(({ notBefore }) => notBefore === undefined));
-		assert.equal((await m.Campaign.findOne({ accountId: user.accountId, _id: id }).lean()).spreadHours, undefined);
-		assert.equal((await m.Account.findById(user.accountId).lean()).spreadUntil, undefined);
+		assert.equal((await m.Campaign.findOne({ accountId: user.accountId, _id: id }).lean()).sendingUntil, undefined);
 		await runJobs();
 	});
 

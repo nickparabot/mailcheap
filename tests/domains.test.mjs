@@ -5,6 +5,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { getSenderPath } from "../lib/newsletters.js";
 import {
 	activate,
+	addAuthor,
 	addLiveWebsiteDomain,
 	addVerifiedDomain,
 	as,
@@ -17,7 +18,7 @@ import {
 	startTestApp,
 	withEnv,
 } from "./helpers/app.mjs";
-import { cnames, txts } from "./stubs/dns-check.mjs";
+import { cnames, records, txts } from "./stubs/dns-check.mjs";
 import { published } from "./stubs/qstash.mjs";
 import { calls, sent, state } from "./stubs/ses.mjs";
 import { dnsRecords } from "./stubs/dns-broker.mjs";
@@ -39,6 +40,7 @@ async function createNewsletter(user, slug, fields = {}) {
 		catchRedirect(m.newsletters.saveNewsletter(null, form({ name: slug, slug, postalAddress: "1 Main St, Paris", archiveEnabled: "on", ...fields })))
 	);
 	user.newsletterId = url.split("/").at(-1);
+	await addAuthor(user);
 	return m.Newsletter.findOne({ accountId: user.accountId, _id: user.newsletterId }).lean();
 }
 
@@ -111,6 +113,7 @@ before(async () => {
 		apiKeys: await import("../app/(app)/api-keys/actions.js"),
 		sendBatchRoute: await import("../app/api/jobs/send-batch/route.js"),
 		billing: await import("../lib/billing.js"),
+		domainsLib: await import("../lib/domains.js"),
 		hostRouting: await import("../lib/host-routing.js"),
 		Account: (await import("../models/Account.js")).default,
 		Campaign: (await import("../models/Campaign.js")).default,
@@ -152,7 +155,7 @@ describe("SES tenants", () => {
 			id: "sub_retry",
 			status: "active",
 			customer: "cus_retry",
-			items: { data: [{ price: { lookup_key: "starter_month" } }] },
+			items: { data: [{ price: { lookup_key: "mailcheap_starter_monthly" } }] },
 		});
 		const account = await m.Account.findById(user.accountId).lean();
 		assert.equal(account.subscriptionStatus, "active");
@@ -456,6 +459,115 @@ describe("own domains", () => {
 		assert.equal(state.identities.has("leaving.com"), false);
 		assert.equal(state.associations.get(`mc-${user.accountId}`).has("identity/leaving.com"), false);
 		assert.match((await as(user, () => m.campaigns.sendTestCampaign(id))).error, /leaving.com isn't one of your domains/);
+	});
+});
+
+// An SES domain's records as DNS answers MailCheap's own lookups: in place, behind Cloudflare's proxy (its addresses where
+// the DKIM CNAMEs should be), or gone.
+function answerDns(domain, how) {
+	for (const token of ["tok1", "tok2", "tok3"]) {
+		const name = `${token}._domainkey.${domain}`;
+		const target = `${token}.dkim.amazonses.com`;
+		records.set(`CNAME ${name}`, how === "found" ? [target] : []);
+		records.set(`TXT ${name}`, how === "found" ? [`v=DKIM1; p=${token}`] : []);
+		records.set(`TXT ${target}`, [`v=DKIM1; p=${token}`]);
+		records.set(`A ${name}`, how === "proxied" ? ["104.21.10.227", "172.67.146.241"] : []);
+	}
+	records.set(`MX bounce.${domain}`, how === "missing" ? [] : ["feedback-smtp.us-east-1.amazonses.com"]);
+	records.set(`TXT bounce.${domain}`, how === "missing" ? [] : ["v=spf1 include:amazonses.com ~all"]);
+}
+
+function stoppedAlerts(domain) {
+	return platformEmails.filter(({ subject }) => subject === `[MailCheap] Sending from ${domain} stopped`);
+}
+
+describe("DNS records MailCheap looks at itself", () => {
+	test("records behind Cloudflare's proxy stop a verified domain: a test says why, the page and the API show it, its owner hears once, and it sends again once fixed", async () => {
+		const user = await customer("proxied@example.com", "proxied-news");
+		const domain = await addVerifiedDomain(user, "proxied-mail.com");
+		await saveFrom(user, "proxied-news", "hi@proxied-mail.com");
+		const id = await draft(user);
+		answerDns("proxied-mail.com", "proxied");
+		// Its last look is over an hour old, so the test looks again.
+		await m.Domain.updateOne({ accountId: user.accountId, _id: domain._id }, { $set: { "dns.checkedAt": new Date(Date.now() - 2 * 3_600_000) } });
+
+		const problem =
+			"proxied-mail.com's signature (DKIM) records are behind a proxy, which hides them from inboxes. On Cloudflare, set them to DNS only.";
+		const before = sent.length;
+		assert.deepEqual(await as(user, () => m.campaigns.sendTestCampaign(id)), { error: `${problem} Then click Check now on the Domains page.` });
+		assert.equal(sent.length, before, "nothing went out");
+		const [alert] = stoppedAlerts("proxied-mail.com");
+		assert.ok(alert.to.includes("proxied@example.com"), "to the owner");
+		assert.ok(alert.text.includes(problem));
+		assert.match(alert.text, /Until then nothing goes out from it, and a campaign sending from it pauses\.\nhttp:\/\/localhost:3000\/domains/);
+
+		const [card] = findAll(renderPage(await as(user, () => m.domainsPage.default())), ({ type }) => type === "section");
+		assert.deepEqual(
+			findAll(card, ({ type }) => type?.name === "TextStatus").map(({ props }) => props.label),
+			["Records need a fix", "Behind a proxy, set it to DNS only", "Found", "Recommended"],
+			"the domain, then its signature, return path and DMARC"
+		);
+		assert.ok(textOf(card).includes("On Cloudflare, set each CNAME to DNS only (grey cloud)."));
+		assert.equal(findAll(card, ({ type }) => type === "details").length, 0, "its records stay open");
+		const pageHtml = renderToStaticMarkup(createElement(m.TooltipProvider, null, await as(user, () => m.domainsPage.default())));
+		assert.match(pageHtml, /hi@proxied-mail\.com<\/span> once its records are fixed/);
+
+		const { key } = await as(user, () => m.apiKeys.createApiKey(null, form({ name: "Agent", level: "full" })));
+		const listed = (await callApi("GET", "/api/v1/domains", { key })).body.domains.find((item) => item.domain === "proxied-mail.com");
+		assert.deepEqual([listed.verified, listed.status, listed.dnsProblem], [false, "Records need a fix", problem]);
+
+		assert.deepEqual(await as(user, () => m.domains.checkDomainAction(String(domain._id))), { ok: true, verified: false, problem });
+		assert.equal(stoppedAlerts("proxied-mail.com").length, 1, "its owner hears once");
+
+		answerDns("proxied-mail.com", "found");
+		assert.deepEqual(await as(user, () => m.domains.checkDomainAction(String(domain._id))), { ok: true, verified: true });
+		assert.deepEqual(await as(user, () => m.campaigns.sendTestCampaign(id)), { ok: true });
+		assert.equal(sent.at(-1).from, "hi@proxied-mail.com");
+	});
+
+	test("the hourly cron looks at each verified domain once a day; one whose records are gone pauses the campaign sending from it", async () => {
+		const user = await customer("gone@example.com", "gone-news");
+		answerDns("gone-mail.com", "found");
+		answerDns("fresh-mail.com", "found");
+		const gone = await addVerifiedDomain(user, "gone-mail.com");
+		await addVerifiedDomain(user, "fresh-mail.com");
+		await saveFrom(user, "gone-news", "hi@gone-mail.com");
+		await as(user, () => m.contacts.importContacts({ newsletterId: user.newsletterId, consent: true, rows: [{ email: "reader@example.org", status: "active" }] }));
+		const id = await draft(user);
+		assert.deepEqual(await as(user, () => m.campaigns.sendCampaign(id, {})), { ok: true });
+
+		answerDns("gone-mail.com", "missing");
+		answerDns("fresh-mail.com", "missing");
+		await m.Domain.updateOne({ accountId: user.accountId, _id: gone._id }, { $set: { "dns.checkedAt": new Date(Date.now() - 25 * 3_600_000) } });
+		const result = await m.domainsLib.recheckDomains();
+		assert.ok(result.checked >= 1 && result.withProblems >= 1);
+		const problems = async (domain) => (await m.Domain.findOne({ accountId: user.accountId, domain }).lean()).dns.problems;
+		assert.deepEqual((await problems("gone-mail.com")).map(({ state }) => state), ["missing", "missing", "missing", "missing", "missing"]);
+		assert.deepEqual(await problems("fresh-mail.com"), [], "looked at less than a day ago: not yet");
+		assert.equal(stoppedAlerts("gone-mail.com").length, 1);
+
+		const before = sent.length;
+		await runJobs();
+		assert.equal(sent.slice(before).filter(({ from }) => from === "hi@gone-mail.com").length, 0, "nothing went out");
+		const campaign = await m.Campaign.findOne({ accountId: user.accountId, _id: id }).lean();
+		assert.equal(campaign.status, "paused");
+		assert.equal(
+			campaign.pauseReason,
+			"gone-mail.com's signature (DKIM) and return path records aren't in its DNS anymore. Add them back. Then click Check now on the Domains page."
+		);
+	});
+
+	test("a domain being set up says when a record is behind a proxy, and leaves the ones not there yet to its provider's status", async () => {
+		const user = await customer("setup-proxy@example.com", "setup-proxy");
+		await as(user, () => m.domains.addDomainAction(null, form({ domain: "setup-proxy.com" })));
+		const domain = await m.Domain.findOne({ accountId: user.accountId, domain: "setup-proxy.com" }).lean();
+
+		answerDns("setup-proxy.com", "missing");
+		assert.deepEqual(await as(user, () => m.domains.checkDomainAction(String(domain._id))), { ok: true, verified: false });
+		answerDns("setup-proxy.com", "proxied");
+		const { problem } = await as(user, () => m.domains.checkDomainAction(String(domain._id)));
+		assert.match(problem, /^setup-proxy\.com's signature \(DKIM\) records are behind a proxy/);
+		assert.equal(stoppedAlerts("setup-proxy.com").length, 0, "it never sent");
 	});
 });
 

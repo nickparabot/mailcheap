@@ -118,6 +118,7 @@ describe("picking a contact to preview as", () => {
 			contact({ email: "axb@example.com", subscribedAt: daysAgo(6) }),
 			contact({ email: "regex@example.com", firstName: "(.*)[x]", subscribedAt: daysAgo(7) }),
 			contact({ email: "html@example.com", firstName: "<b>Bo</b> & co", subscribedAt: daysAgo(8) }),
+			contact({ email: "dana@example.net", firstName: "Dana", subscribedAt: daysAgo(9) }),
 			contact({ email: "johnny@example.com", firstName: "Johnny", status: "unsubscribed", subscribedAt: daysAgo(0) }),
 			contact({ email: "jon@example.com", firstName: "Jon", status: "bounced", subscribedAt: daysAgo(0) }),
 			contact({ email: "jolene@example.com", firstName: "Jolene", newsletterId: otherNewsletterId, subscribedAt: daysAgo(0) }),
@@ -133,11 +134,15 @@ describe("picking a contact to preview as", () => {
 
 	after(() => app?.stop());
 
-	test("the picker finds the newsletter's active contacts by the start of their address or first name, newest first", async () => {
+	test("the picker finds the newsletter's active contacts by any part of their address or first name, newest first", async () => {
 		assert.deepEqual(await emails("jo"), ["joanna@example.com", "sam@example.com", "jo@example.com"], "addresses and names, in any case");
 		assert.deepEqual(await emails("JOSE"), ["sam@example.com"]);
 		assert.deepEqual(await emails("  jo@ "), ["jo@example.com"]);
-		assert.deepEqual(await emails("anna"), [], "only the start");
+		assert.deepEqual(await emails("anna"), ["joanna@example.com"], "not only the start");
+		assert.deepEqual(await emails("@example.net"), ["dana@example.net"], "everyone at a domain");
+		assert.deepEqual(await emails("*@EXAMPLE.NET"), ["dana@example.net"]);
+		assert.deepEqual(await emails("d*a@*.net"), ["dana@example.net"], "a * stands for any characters");
+		assert.deepEqual(await emails("x*@example.net"), [], "in order: example's x comes after the @");
 		assert.deepEqual(await emails(""), [
 			"joanna@example.com",
 			"sam@example.com",
@@ -151,8 +156,16 @@ describe("picking a contact to preview as", () => {
 		const [joanna] = (await find("joanna")).contacts;
 		assert.deepEqual(
 			joanna,
-			{ id: joanna.id, email: "joanna@example.com", firstName: "Joanna", fields: {}, gravatarHash: gravatarHash("joanna@example.com") },
-			"only what the preview fills in, and the hash its picture comes from"
+			{
+				id: joanna.id,
+				email: "joanna@example.com",
+				firstName: "Joanna",
+				fields: {},
+				tags: ["vip"],
+				segments: {},
+				gravatarHash: gravatarHash("joanna@example.com"),
+			},
+			"only what the preview fills in, the tags and segments its sections read, and the hash its picture comes from"
 		);
 		assert.deepEqual((await find("nameless")).contacts[0].firstName, null);
 	});
@@ -165,16 +178,18 @@ describe("picking a contact to preview as", () => {
 		assert.match((await find("jo", "")).error, /newsletter/, "a newsletter is needed");
 	});
 
-	test("what's typed is only ever text: never a pattern or an operator", async () => {
+	test("what's typed is only ever text, where * stands for any characters: never a pattern or an operator", async () => {
 		assert.deepEqual(await emails("a.b"), ["a.b@example.com"], "a dot is a dot");
-		assert.deepEqual(await emails(".*"), []);
+		assert.deepEqual(await emails("a*b"), ["a.b@example.com", "axb@example.com"], "a * is any characters");
 		assert.deepEqual(await emails("(.*)"), ["regex@example.com"], "brackets match themselves");
-		for (const query of ["[", "\\", "*", "+?", "^$", "a{2,}", "$where", "[x]|.*", "x|"]) {
+		assert.deepEqual(await emails("[x]"), ["regex@example.com"]);
+		assert.deepEqual(await emails("*"), await emails(""), "a * alone is anyone");
+		for (const query of ["\\", "+?", "^$", "a{2,}", "$where", "[x]|.", "x|", "(?>", ".*?", ")*("]) {
 			assert.deepEqual(await emails(query), [], query);
 		}
 		assert.deepEqual((await find({ $gt: "" })).contacts, [], "an object is read as text");
 		assert.deepEqual((await find({ $regex: ".*" })).contacts, []);
-		const viaApi = await callApi("GET", `/api/v1/contacts/search?newsletter=${user.newsletterId}&query[$gt]=&query=.*`, { key: user.key });
+		const viaApi = await callApi("GET", `/api/v1/contacts/search?newsletter=${user.newsletterId}&query[$gt]=&query=[a-z]`, { key: user.key });
 		assert.equal(viaApi.status, 200, JSON.stringify(viaApi.body));
 		assert.deepEqual(viaApi.body.contacts, []);
 	});

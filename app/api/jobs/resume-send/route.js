@@ -3,7 +3,8 @@ import { withQStashSignature } from "@/lib/qstash-route";
 import { resumeRateLimited } from "@/lib/sending";
 
 export const dynamic = "force-dynamic";
-export const maxDuration = 60;
+// No maxDuration: resuming publishes everything a send still has queued, so how long it may run is the host's to set, and
+// one set here would override it. Vercel's default is 300 seconds.
 
 // Handled outcomes answer 200 so QStash doesn't retry them; a thrown error (database down) is retried.
 async function handleResume(request) {

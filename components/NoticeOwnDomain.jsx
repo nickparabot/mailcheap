@@ -2,8 +2,9 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import { Globe, X } from "lucide-react";
+import { Globe } from "lucide-react";
 import { dismissOwnDomainNudge } from "@/app/welcome/actions";
+import ButtonClose from "@/components/ButtonClose";
 import { Button } from "@/components/ui/button";
 import { ADD_DOMAIN_PATH, DOMAINS_PATH, getSenderPath } from "@/lib/newsletters";
 import { toast } from "@/lib/toast";
@@ -62,23 +63,6 @@ export default function NoticeOwnDomain({ nudge, newsletter, variant = "inline",
 			</p>
 			<ButtonClose onClick={close} className="-my-0.5 -mr-1" />
 		</div>
-	);
-}
-
-function ButtonClose({ onClick, className }) {
-	return (
-		<button
-			type="button"
-			onClick={onClick}
-			aria-label="Close"
-			title="Close"
-			className={cn(
-				"relative grid size-6 shrink-0 place-items-center rounded-md text-muted-foreground transition-[color,background-color,scale] duration-150 after:absolute after:-inset-2 hover:bg-muted hover:text-foreground active:scale-[0.96]",
-				className
-			)}
-		>
-			<X className="size-3.5" aria-hidden="true" />
-		</button>
 	);
 }
 

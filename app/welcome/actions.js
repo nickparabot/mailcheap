@@ -3,7 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { scoped } from "@/lib/account-scope";
-import { runDashboardAction, toFormError } from "@/lib/actions/dashboard";
+import { runAccountAction, toFormError } from "@/lib/actions/dashboard";
 import { requireAccount } from "@/lib/auth";
 import { LIST_SIZES, LIST_SOURCES, OTHER_LIST_SOURCE, findFreeSlug, needsOnboarding } from "@/lib/onboarding";
 import { OWN_DOMAIN_STEPS } from "@/lib/sender-rules";
@@ -28,7 +28,7 @@ export async function completeOnboarding(_state, formData) {
 	const name = readText(formData, "name");
 	if (!name) return { error: "Name your newsletter" };
 	if (await needsOnboarding(account)) {
-		const { failure } = await runDashboardAction("create_newsletter", {
+		const { failure } = await runAccountAction("create_newsletter", {
 			name,
 			slug: await findFreeSlug(name),
 			description: readText(formData, "description"),
@@ -53,12 +53,15 @@ export async function completeOnboarding(_state, formData) {
 	redirect("/");
 }
 
-// The dashboard's get-started panel, hidden on the account so it stays hidden on every device.
-export async function dismissGetStarted() {
+// The get-started panel of one of the account's newsletters, hidden on the newsletter so it stays hidden on every
+// device. Its other newsletters keep theirs.
+export async function dismissGetStarted(newsletterId) {
+	const id = String(newsletterId ?? "");
+	if (!isObjectIdString(id)) return { error: "Couldn't close it" };
 	const { account } = await requireAccount();
-	await Account.updateOne(
-		{ _id: account._id, "onboarding.checklistDismissedAt": null },
-		{ $set: { "onboarding.checklistDismissedAt": new Date() } }
+	await Newsletter.updateOne(
+		scoped(account, { _id: id, "getStarted.dismissedAt": null }),
+		{ $set: { "getStarted.dismissedAt": new Date() } }
 	);
 	revalidatePath("/", "layout");
 	return { ok: true };
@@ -72,5 +75,16 @@ export async function dismissOwnDomainNudge(newsletterId, step) {
 	if (!isObjectIdString(id) || !OWN_DOMAIN_STEPS.includes(step)) return { error: "Couldn't close it" };
 	const { account } = await requireAccount();
 	await Newsletter.updateOne(scoped(account, { _id: id }), { $set: { "dismissedNudges.ownDomain": step } });
+	return { ok: true };
+}
+
+// The inbox check at the dashboard's bottom right (lib/inbox-check.js), closed for good for one of the account's
+// newsletters. The layout renders again, so the corner moves on to what waits for it.
+export async function dismissInboxCheck(newsletterId) {
+	const id = String(newsletterId ?? "");
+	if (!isObjectIdString(id)) return { error: "Couldn't close it" };
+	const { account } = await requireAccount();
+	await Newsletter.updateOne(scoped(account, { _id: id, "dismissedNudges.inboxCheck": null }), { $set: { "dismissedNudges.inboxCheck": new Date() } });
+	revalidatePath("/", "layout");
 	return { ok: true };
 }

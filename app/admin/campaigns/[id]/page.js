@@ -11,17 +11,18 @@ import { describeBlocker, getAccountStatus, getSendingStatus, isBlocked } from "
 import { getCampaignForAdmin } from "@/lib/admin-stats";
 import { getArchiveUrls } from "@/lib/archive-hosts";
 import { requireAdmin } from "@/lib/auth";
+import { findCampaignAuthor } from "@/lib/authors";
 import { findCampaignLinks } from "@/lib/campaign-links";
 import { getCampaignActivity, getCampaignComparison } from "@/lib/campaign-report";
 import { isCloud } from "@/lib/config";
 import { REVIEW_PAUSE_CODE } from "@/lib/content-review-codes";
 import { toPreviewHtml } from "@/lib/email-preview";
-import { formatDate, formatDateTime, formatNumber, formatRelative } from "@/lib/format";
+import { formatDateTime, formatNumber, formatRelative } from "@/lib/format";
 import { getAccountPlan, isOnFreePlan } from "@/lib/plans";
 import { getPostalAddress } from "@/lib/postal-address";
 import { describePublishTo, isOnWebsite, sendsEmail } from "@/lib/publish-to";
 import { renderEmail } from "@/lib/render-email";
-import { getWarmup } from "@/lib/send-spread";
+import { withAllSections } from "@/lib/sections";
 import { serialize } from "@/lib/serialize";
 import { siteExtensions } from "@/lib/site-extensions";
 import { TIME_ZONE_COOKIE, resolveTimeZone } from "@/lib/time-zone";
@@ -42,20 +43,24 @@ export default async function AdminCampaignPage({ params }) {
 
 	const { campaign } = found;
 	const newsletter = { ...found.newsletter, postalAddress: getPostalAddress(found.newsletter, siteExtensions.defaultPostalAddress) };
-	const [{ providers, timeline }, comparison, links, cookieStore] = await Promise.all([
+	const [{ providers, timeline }, comparison, links, cookieStore, author] = await Promise.all([
 		getCampaignActivity(campaign),
 		getCampaignComparison(campaign),
 		findCampaignLinks(campaign),
 		cookies(),
+		findCampaignAuthor(campaign),
 	]);
 	const timeZone = resolveTimeZone(cookieStore.get(TIME_ZONE_COOKIE)?.value);
+	// Every section, whoever and wherever it's for: the content as its author wrote it, and the name the check read,
+	// shown or not.
 	const { html } = renderEmail({
 		format: campaign.format,
 		markdown: campaign.markdown,
-		html: campaign.html,
+		html: campaign.format === "rich" ? withAllSections(campaign.html) : campaign.html,
 		subject: campaign.subject,
 		previewText: campaign.previewText,
 		newsletter,
+		author: author && { name: author.name, imageUrl: author.imageUrl || null },
 	});
 
 	return (
@@ -199,10 +204,9 @@ function describePlan(account) {
 	return `${plan.name} · ${account.interval === "year" ? "yearly" : "monthly"}`;
 }
 
-// A blocked account first, then a warm-up; nothing for an account that sends normally.
+// A blocked account first; nothing for an account that sends normally.
 function getAccountNote(account) {
 	if (isBlocked(account)) return `Blocked by ${describeBlocker(account.pausedBy)}${account.pauseReason ? `: ${account.pauseReason}` : ""}`;
-	if (getWarmup(account)) return account.spreadUntil ? `Warming up until ${formatDate(account.spreadUntil)}` : "Warms up from its first campaign";
 	const sending = getSendingStatus(account);
 	return sending.tone === "green" ? null : sending.label;
 }

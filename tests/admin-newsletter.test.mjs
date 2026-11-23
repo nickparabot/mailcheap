@@ -15,6 +15,7 @@ before(async () => {
 	m = {
 		page: (await import("../app/admin/newsletters/[id]/page.js")).default,
 		review: await import("../lib/content-review.js"),
+		alerts: await import("../lib/alerts.js"),
 	};
 	admin = await signIn("ops@example.com");
 	customer = await signIn("customer@example.com");
@@ -76,4 +77,16 @@ test("the admin sees the held confirmation email, what the check found and the d
 	assert.ok(markup.includes("Log in to your bank first"), "the email as its owner wrote it");
 	assert.ok(markup.includes(`/admin?account=${customer.accountId}`), "the account links to its row");
 	assert.ok(!markup.includes("reader-one@example.org"));
+});
+
+test("its alerts include the ones only for the admin page, which are never emailed", async () => {
+	await m.alerts.sendAlert({
+		accountId: null,
+		key: `gmail-backoff:${newsletterId}`,
+		title: "Gmail is rate limiting a newsletter",
+		detail: `Field notes (field-notes.example.com), account ${customer.accountId}. Gmail answered: 4.7.28 Reputation.`,
+		path: `/admin/newsletters/${newsletterId}`,
+	});
+	const markup = renderToStaticMarkup(await as(admin, () => open(newsletterId)));
+	assert.ok(markup.includes("Gmail is rate limiting a newsletter"));
 });

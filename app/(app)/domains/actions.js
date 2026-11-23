@@ -19,7 +19,7 @@ export async function checkDomainAction(domainId) {
 	const { output, failure } = await runDashboardAction("check_domain", { id: String(domainId) });
 	revalidatePath("/domains");
 	if (failure) return toDomainError(failure, "Checking the domain");
-	return { ok: true, verified: output.verified };
+	return { ok: true, verified: output.verified, ...(output.dnsProblem && { problem: output.dnsProblem }) };
 }
 
 export async function removeDomainAction(domainId) {

@@ -2,8 +2,7 @@
 
 import { useActionState, useEffect, useState, useTransition } from "react";
 import { Ban, CircleOff, Gauge, Gift, Loader2, MoreHorizontal, ShieldCheck } from "lucide-react";
-import { blockAccountAction, endFreePlan, giveFreePlan, saveLimits, setSpread, unblockAccountAction } from "@/app/admin/actions";
-import IconWarmup from "@/components/IconWarmup";
+import { blockAccountAction, endFreePlan, giveFreePlan, saveLimits, unblockAccountAction } from "@/app/admin/actions";
 import InputDate from "@/components/InputDate";
 import { Button } from "@/components/ui/button";
 import {
@@ -29,29 +28,18 @@ export default function MenuAccount({
 	blockedBy,
 	blockReason,
 	hasLimits,
-	canSpread,
-	isSpreading,
 	canGiveFreePlan,
 	freePlan,
 	overrides,
 	planLimits,
 }) {
 	const [dialog, setDialog] = useState(null);
-	const [isPending, startTransition] = useTransition();
-
-	function toggleSpread() {
-		startTransition(async () => {
-			const result = await setSpread(accountId, !isSpreading);
-			if (result?.error) toast.error(result.error);
-			else toast.success(isSpreading ? "Warm-up ended" : "Warm-up started again");
-		});
-	}
 
 	return (
 		<>
 			<DropdownMenu>
 				<DropdownMenuTrigger asChild>
-					<Button variant="ghost" size="icon-sm" aria-label="Actions" disabled={isPending}>
+					<Button variant="ghost" size="icon-sm" aria-label="Actions">
 						<MoreHorizontal />
 					</Button>
 				</DropdownMenuTrigger>
@@ -60,12 +48,6 @@ export default function MenuAccount({
 						<DropdownMenuItem onSelect={() => setDialog("limits")}>
 							<Gauge />
 							Change limits
-						</DropdownMenuItem>
-					)}
-					{canSpread && (
-						<DropdownMenuItem onSelect={toggleSpread}>
-							<IconWarmup />
-							{isSpreading ? "End warm-up" : "Start warm-up again"}
 						</DropdownMenuItem>
 					)}
 					{canGiveFreePlan && (

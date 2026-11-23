@@ -11,14 +11,18 @@ export default function BadgeStatus({ status, label, className, children }) {
 				className
 			)}
 		>
-			<span className={cn("size-1.5 rounded-full", DOT_TONES[STATUS_TONES[key] || "gray"])} />
+			<DotStatus status={key} />
 			{label || statusLabel(key)}
 			{children}
 		</span>
 	);
 }
 
-function statusLabel(status) {
+export function DotStatus({ status, className }) {
+	return <span aria-hidden="true" className={cn("size-1.5 shrink-0 rounded-full", DOT_TONES[STATUS_TONES[status] || "gray"], className)} />;
+}
+
+export function statusLabel(status) {
 	const text = status.replaceAll("_", " ");
 	return text.charAt(0).toUpperCase() + text.slice(1);
 }

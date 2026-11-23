@@ -5,12 +5,14 @@ import { normalizePostshibaEvent } from "../lib/email-provider/postshiba-events.
 import { normalizeSesEvent } from "../lib/ses-event-mapping.js";
 import {
 	activate,
+	addAuthor,
 	addVerifiedDomain,
 	as,
 	catchRedirect,
 	endSenderWarmup,
 	form,
 	jsonRequest,
+	mockRdap,
 	platformEmails,
 	signIn,
 	startTestApp,
@@ -67,6 +69,7 @@ describe("a domain Gmail rate limits", () => {
 		const fields = { name: slug, slug, postalAddress: "1 Main St", ...(fromEmail && { fromEmail }) };
 		const url = await as(user, () => catchRedirect(m.newsletters.saveNewsletter(null, form(fields))));
 		const send = { user, accountId: user.accountId, newsletterId: url.split("/").at(-1) };
+		await addAuthor(user, send.newsletterId);
 		if (isWarm) await endSenderWarmup(send);
 		await m.Contact.insertMany(
 			Array.from({ length: contacts }, (_, index) => ({
@@ -116,7 +119,7 @@ describe("a domain Gmail rate limits", () => {
 			domain: domain ?? (await m.Newsletter.findOne({ accountId: send.accountId, _id: send.newsletterId }).lean()).sendingDomain,
 		}).lean();
 	const resume = async (job) => (await m.resumeRoute.POST(jsonRequest(job.url, { method: "POST", body: job.body }))).json();
-	const adminAlerts = () => platformEmails.filter(({ subject }) => subject === "[MailCheap] Gmail is rate limiting a newsletter").length;
+	const backoffAlert = (send) => m.Alert.findOne({ accountId: null, key: `gmail-backoff:${send.newsletterId}` }).lean();
 
 	before(async () => {
 		app = await startTestApp({ QSTASH_CURRENT_SIGNING_KEY: "sig-current", QSTASH_NEXT_SIGNING_KEY: "sig-next", SEND_RATE_PER_SECOND: "1000" });
@@ -127,6 +130,7 @@ describe("a domain Gmail rate limits", () => {
 			resumeRoute: await import("../app/api/jobs/resume-send/route.js"),
 			emailEvents: await import("../lib/email-events.js"),
 			blocks: await import("../lib/account-blocks.js"),
+			Alert: (await import("../models/Alert.js")).default,
 			Campaign: (await import("../models/Campaign.js")).default,
 			Contact: (await import("../models/Contact.js")).default,
 			Message: (await import("../models/Message.js")).default,
@@ -137,7 +141,7 @@ describe("a domain Gmail rate limits", () => {
 
 	after(() => app?.stop());
 
-	test("its sends pause for 6 hours, the owner and the admins hear of it, then they go on with the domain warming up from half its day", async () => {
+	test("its sends pause for 6 hours, the owner hears of it and the admin page shows it, then Gmail gets half its day, spread over 3 doubling days", async () => {
 		const send = await setup("rate-limited@example.com", 1000);
 		await runBatches(send.batches.slice(0, 8));
 		const before = { emails: platformEmails.length, telegram: telegramMessages.length, jobs: published.length };
@@ -148,24 +152,24 @@ describe("a domain Gmail rate limits", () => {
 		assert.deepEqual([paused.status, paused.pauseCode], ["paused", "rate_limited"]);
 		assert.match(paused.pauseReason, /^Gmail asked to slow down, so this newsletter's sends wait 6 hours/);
 		const domain = await domainOf(send);
-		near(domain.startedAt.getTime(), limitedAt + 6 * HOUR_MS, "its warm-up starts over when its sends go on");
-		assert.equal(domain.firstDay, 200, "half of the 400 it sent in the last day");
+		near(domain.startedAt.getTime(), limitedAt + 6 * HOUR_MS, "its days start when its sends go on");
+		assert.deepEqual([domain.firstDay, domain.days], [200, 3], "half of the 400 Gmail emails it sent in the last day, for 3 days");
 		const jobs = published.slice(before.jobs);
 		assert.deepEqual(jobs.map(({ url }) => new URL(url).pathname), ["/api/jobs/resume-send"]);
 		near(jobs[0].notBefore * 1000, limitedAt + 6 * HOUR_MS);
 		assert.deepEqual(
 			platformEmails.slice(before.emails).map(({ to, subject }) => [to[0], subject]),
-			[
-				["rate-limited@example.com", "[MailCheap] Campaign paused"],
-				["admin@example.com", "[MailCheap] Gmail is rate limiting a newsletter"],
-			]
+			[["rate-limited@example.com", "[MailCheap] Campaign paused"]],
+			"MailCheap handles it, so the admins get neither an email nor a Telegram message"
 		);
-		assert.equal(telegramMessages.length, before.telegram + 1);
-		assert.match(telegramMessages.at(-1).text, /Gmail is rate limiting a newsletter/);
+		assert.equal(telegramMessages.length, before.telegram);
+		const alert = await backoffAlert(send);
+		assert.deepEqual(alert.occurrences.map(({ emailed, telegram }) => ({ emailed, telegram })), [{ emailed: false, telegram: false }]);
+		assert.match(alert.occurrences[0].detail, /Gmail answered: .*unusual rate of mail/);
 
 		await withEnv(TELEGRAM, () => defer(send, GMAIL_LIMIT));
 		assert.equal(published.length, before.jobs + 1, "Gmail saying it again, about emails still queued, changes nothing");
-		assert.equal(telegramMessages.length, before.telegram + 1);
+		assert.equal((await backoffAlert(send)).count, 1);
 		assert.equal((await domainOf(send)).firstDay, 200);
 
 		const resumedFrom = published.length;
@@ -178,10 +182,11 @@ describe("a domain Gmail rate limits", () => {
 			batches.every(({ notBefore }) => notBefore * 1000 >= limitedAt + 6 * HOUR_MS - 60_000),
 			"nothing goes before the 6 hours"
 		);
+		near(batches[1].notBefore * 1000, limitedAt + 12 * HOUR_MS, "spread over the day: the 51st a quarter into it", 120_000);
 		near(
 			batches.at(-1).notBefore * 1000,
-			limitedAt + (6 + 24 + 9) * HOUR_MS,
-			"200 at once, the next 200 over its first day, the last 150 into its second day's 400",
+			limitedAt + (6 + 24 + 21) * HOUR_MS,
+			"200 over its first day, the last 350 into its second day's 400",
 			120_000
 		);
 
@@ -193,7 +198,7 @@ describe("a domain Gmail rate limits", () => {
 		await runBatches(send.batches.slice(0, 8));
 		const limitedAt = Date.now();
 		await defer(send, GMAIL_LIMIT);
-		const alerts = adminAlerts();
+		assert.equal((await backoffAlert(send)).count, 1);
 
 		const from = published.length;
 		assert.deepEqual(await as(send.user, () => m.campaigns.resumeCampaign(send.campaignId)), { ok: true });
@@ -206,7 +211,7 @@ describe("a domain Gmail rate limits", () => {
 		assert.deepEqual([paused.status, paused.pauseCode], ["paused", "rate_limited"]);
 		const [job] = jobsTo(published.slice(again), "resume-send");
 		near(job.notBefore * 1000, limitedAt + 6 * HOUR_MS, "it goes on when the back-off ends, not 6 hours from now");
-		assert.equal(adminAlerts(), alerts);
+		assert.equal((await backoffAlert(send)).count, 1);
 	});
 
 	test("a newsletter that moves to another domain during a back-off still waits for it, from no more emails", async () => {
@@ -224,16 +229,23 @@ describe("a domain Gmail rate limits", () => {
 		assert.ok(batches.every(({ notBefore }) => notBefore * 1000 >= limitedAt + 6 * HOUR_MS - 60_000), "nothing before the back-off ends");
 		const moved = await domainOf(send, "moved-in-backoff.example.org");
 		near(moved.startedAt.getTime(), limitedAt + 6 * HOUR_MS);
-		assert.equal(moved.firstDay, 200, "the back-off's emails, under a new domain's 1,000");
+		assert.deepEqual([moved.firstDay, moved.days], [200, 3], "the back-off's emails and days, under a new domain's 2,000");
 	});
 
-	test("newsletters on one domain share its warm-up and its back-off", async () => {
+	test("newsletters on one new domain share its first day with Gmail and its back-off", async () => {
 		const user = await account("two-lists@example.com");
 		await addVerifiedDomain(user, "two-lists.example.org");
-		const first = await sending(user, "first-list", 400, { fromEmail: "first@two-lists.example.org", isWarm: false });
-		const second = await sending(user, "second-list", 400, { fromEmail: "second@two-lists.example.org", isWarm: false });
-		assert.ok(second.batches[0].notBefore * 1000 > Date.now() + 4 * HOUR_MS, "the second waits for the first one's emails from the same domain");
-		assert.equal(await m.SenderDomain.countDocuments({ accountId: user.accountId }), 1, "one warm-up for the domain");
+		mockRdap((domain) => (domain === "two-lists.example.org" ? new Date(Date.now() - 3 * 86_400_000) : null));
+		const first = await sending(user, "first-list", 1200, { fromEmail: "first@two-lists.example.org", isWarm: false });
+		const second = await sending(user, "second-list", 1200, { fromEmail: "second@two-lists.example.org", isWarm: false });
+		mockRdap(null);
+		assert.ok(first.batches.every(({ notBefore }) => notBefore === undefined), "1,200 of the day's 2,000");
+		assert.deepEqual(
+			[second.batches.filter(({ notBefore }) => notBefore === undefined).length, second.batches.filter(({ notBefore }) => notBefore).length],
+			[16, 8],
+			"the second gets the other 800 today, after the first one's emails, and its last 400 the next day"
+		);
+		assert.equal(await m.SenderDomain.countDocuments({ accountId: user.accountId }), 1, "one first day for the domain");
 
 		await runBatches(first.batches.slice(0, 4));
 		await defer(first, GMAIL_LIMIT);

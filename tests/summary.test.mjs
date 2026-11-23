@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import crypto from "node:crypto";
 import { test } from "node:test";
 import { getContrast } from "../lib/colors.js";
 import {
@@ -28,6 +29,7 @@ process.env.APP_URL = "https://mail.example.com";
 
 const CLOUD = { MAILCHEAP_CLOUD: "true" };
 const ACCOUNT_ID = "74f1a2b3c4d5e6f7a8b9c0d1";
+const NEWSLETTER_ID = "74f1a2b3c4d5e6f7a8b9c0d2";
 const HOUR_MS = 3_600_000;
 
 function at(iso) {
@@ -157,12 +159,15 @@ test("the opening line says the one thing worth saying, from facts only", () => 
 
 test("a day with no one joining or leaving and no issue is quiet", () => {
 	const quiet = { subscribers: { joined: 0, left: 0 }, unsubscribed: 0, issue: { isInPeriod: false } };
-	assert.equal(isQuietSummary([quiet, { ...quiet, issue: null }]), true);
-	assert.equal(isQuietSummary([quiet, { ...quiet, issue: { isInPeriod: true } }]), false);
-	assert.equal(isQuietSummary([{ ...quiet, subscribers: { joined: 1, left: 0 } }]), false);
+	assert.equal(isQuietSummary(quiet), true);
+	assert.equal(isQuietSummary({ ...quiet, issue: null }), true);
+	assert.equal(isQuietSummary({ ...quiet, issue: { isInPeriod: true } }), false);
+	assert.equal(isQuietSummary({ ...quiet, subscribers: { joined: 1, left: 0 } }), false);
+	assert.equal(isQuietSummary({ ...quiet, subscribers: { joined: 0, left: 1 } }), false);
+	assert.equal(isQuietSummary({ ...quiet, unsubscribed: 1 }), false);
 });
 
-test("summaries are for paying MailCheap Cloud accounts, weekly unless their owner chose", () => {
+test("summaries are for paying MailCheap Cloud accounts, each newsletter weekly unless its owner chose", () => {
 	const paying = { subscriptionStatus: "active" };
 	assert.equal(isSummaryEligible(paying, CLOUD), true);
 	assert.equal(isSummaryEligible({ subscriptionStatus: "past_due" }, CLOUD), true);
@@ -173,21 +178,31 @@ test("summaries are for paying MailCheap Cloud accounts, weekly unless their own
 	assert.equal(isSummaryEligible(paying, {}), false, "a self-hosted server");
 
 	assert.equal(getSummaryFrequency({}), "weekly");
-	assert.equal(getSummaryFrequency({ summary: { frequency: "daily" } }), "daily");
-	assert.equal(getSummaryFrequency({ summary: { frequency: "hourly" } }), "weekly");
+	assert.equal(getSummaryFrequency(null), "weekly");
+	assert.equal(getSummaryFrequency({ notifications: { summary: "daily" } }), "daily");
+	assert.equal(getSummaryFrequency({ notifications: { summary: "off" } }), "off");
+	assert.equal(getSummaryFrequency({ notifications: { summary: "hourly" } }), "weekly");
+	assert.equal(getSummaryFrequency({ summary: { frequency: "off" } }), "weekly", "an account's old choice isn't a newsletter's");
 });
 
-test("a summary's settings link names one account and expires; its share link carries only the totals", () => {
+test("a summary's settings link names one newsletter of one account and expires; its share link carries only the totals", () => {
 	const now = Date.UTC(2026, 9, 26, 7);
-	const token = createSummarySettingsToken(ACCOUNT_ID, now);
-	assert.deepEqual(verifySummarySettingsToken(token, now + 30 * 24 * HOUR_MS), { accountId: ACCOUNT_ID });
+	const reference = { accountId: ACCOUNT_ID, newsletterId: NEWSLETTER_ID };
+	const token = createSummarySettingsToken(reference, now);
+	assert.deepEqual(verifySummarySettingsToken(token, now + 30 * 24 * HOUR_MS), reference);
 	assert.equal(verifySummarySettingsToken(token, now + SETTINGS_TOKEN_MAX_AGE_MS + 1_000), null, "expired");
-	assert.equal(verifySummarySettingsToken(createSummarySettingsToken(ACCOUNT_ID, now + 5 * 60_000), now), null, "from the future");
+	assert.equal(verifySummarySettingsToken(createSummarySettingsToken(reference, now + 5 * 60_000), now), null, "from the future");
 	const [payload, signature] = token.split(".");
-	const forged = Buffer.from(JSON.stringify({ a: "74f1a2b3c4d5e6f7a8b9c0d9", t: Math.floor(now / 1000) })).toString("base64url");
-	assert.equal(verifySummarySettingsToken(`${forged}.${signature}`, now), null, "another account under the same signature");
+	const forge = (data) => `${Buffer.from(JSON.stringify({ t: Math.floor(now / 1000), ...data })).toString("base64url")}.${signature}`;
+	assert.equal(verifySummarySettingsToken(forge({ a: "74f1a2b3c4d5e6f7a8b9c0d9", n: NEWSLETTER_ID }), now), null, "another account under the same signature");
+	assert.equal(verifySummarySettingsToken(forge({ a: ACCOUNT_ID, n: "74f1a2b3c4d5e6f7a8b9c0d9" }), now), null, "another newsletter under the same signature");
 	assert.equal(verifySummarySettingsToken(`${payload}.${signature.slice(0, -2)}AA`, now), null);
-	assert.throws(() => createSummarySettingsToken("not-an-id", now));
+	assert.throws(() => createSummarySettingsToken({ accountId: "not-an-id", newsletterId: NEWSLETTER_ID }, now));
+	assert.throws(() => createSummarySettingsToken({ accountId: ACCOUNT_ID }, now), "a link always names its newsletter");
+	const key = Buffer.from(crypto.hkdfSync("sha256", process.env.BETTER_AUTH_SECRET, "", "mailcheap-summary-settings", 32));
+	const accountOnly = Buffer.from(JSON.stringify({ a: ACCOUNT_ID, t: Math.floor(now / 1000) })).toString("base64url");
+	const signed = `${accountOnly}.${crypto.createHmac("sha256", key).update(accountOnly).digest("base64url")}`;
+	assert.equal(verifySummarySettingsToken(signed, now), null, "a signed link for the whole account, as summaries were, changes nothing");
 
 	const share = createSummaryShareToken({ name: `  ${"N".repeat(90)} `, joined: 12.4, total: 1_510, frequency: "weekly", lastKey: "2026-10-25" });
 	assert.deepEqual(verifySummaryShareToken(share), { name: "N".repeat(80), joined: 12, total: 1_510, frequency: "weekly", lastKey: "2026-10-25" });
@@ -198,17 +213,20 @@ test("a summary's settings link names one account and expires; its share link ca
 
 test("share links exist on MailCheap Cloud for a period someone joined in, and every link opens the right newsletter", async () => {
 	const period = getSummaryPeriod({ frequency: "weekly", todayKey: "2026-10-26", timeZone: "UTC" });
-	const summary = (joined) => ({ newsletters: [{ id: "74f1a2b3c4d5e6f7a8b9c0d2", name: "Hens", subscribers: { joined, total: 40 }, issue: { id: "74f1a2b3c4d5e6f7a8b9c0d3" } }] });
+	const newsletter = (joined) => ({ id: NEWSLETTER_ID, name: "Hens", subscribers: { joined, total: 40 }, issue: { id: "74f1a2b3c4d5e6f7a8b9c0d3" } });
 	const account = { _id: ACCOUNT_ID };
 	await withEnv(CLOUD, () => {
-		const links = createSummaryEmailLinks({ account, summary: summary(4), period });
+		const links = createSummaryEmailLinks({ account, newsletter: newsletter(4), period });
 		assert.equal(links.dashboardUrl, "https://mail.example.com/newsletters/74f1a2b3c4d5e6f7a8b9c0d2?next=%2F");
 		assert.equal(links.campaignUrl, "https://mail.example.com/campaigns/74f1a2b3c4d5e6f7a8b9c0d3");
 		assert.match(links.shareUrl, /^https:\/\/mail\.example\.com\/share\/[\w-]+\.[\w-]+$/);
 		assert.match(links.oneClickUrl, /^https:\/\/mail\.example\.com\/api\/summary\/unsubscribe\?token=/);
-		assert.equal(createSummaryEmailLinks({ account, summary: summary(0), period }).shareUrl, null);
+		const token = links.settingsUrl.split("/summary/")[1];
+		assert.equal(links.oneClickUrl.split("token=")[1], token, "the footer and the mail app's button act on the same newsletter");
+		assert.deepEqual(verifySummarySettingsToken(token), { accountId: ACCOUNT_ID, newsletterId: NEWSLETTER_ID });
+		assert.equal(createSummaryEmailLinks({ account, newsletter: newsletter(0), period }).shareUrl, null);
 	});
-	await withEnv({ MAILCHEAP_CLOUD: "" }, () => assert.equal(createSummaryEmailLinks({ account, summary: summary(4), period }).shareUrl, null));
+	await withEnv({ MAILCHEAP_CLOUD: "" }, () => assert.equal(createSummaryEmailLinks({ account, newsletter: newsletter(4), period }).shareUrl, null));
 });
 
 const LINKS = {
@@ -223,10 +241,10 @@ const LINKS = {
 
 function renderEmail(overrides = {}) {
 	const period = getSummaryPeriod({ frequency: "weekly", todayKey: "2026-10-26", timeZone: "UTC" });
-	return renderSummaryEmail({ frequency: "weekly", period, newsletters: [newsletter()], links: LINKS, postalAddress: "1 Main St, Singapore", ...overrides });
+	return renderSummaryEmail({ frequency: "weekly", period, newsletter: newsletter(), links: LINKS, postalAddress: "1 Main St, Singapore", ...overrides });
 }
 
-// The newsletter the fixture renders: the one shown in full, and a line each for the others.
+// The newsletter the fixture renders, and what a summary email is about.
 function newsletter(overrides = {}) {
 	return {
 		id: "74f1a2b3c4d5e6f7a8b9c0d2",
@@ -252,16 +270,14 @@ function newsletter(overrides = {}) {
 	};
 }
 
-// Every shape the email takes - the numbers and the issue in full, a daily one, the other newsletters, and one with
-// nothing to report - since each is painted in the same palette.
+// Every shape the email takes - the numbers and the issue in full, a daily one, and one with nothing to report -
+// since each is painted in the same palette.
 function summaryEmails() {
 	const daily = getSummaryPeriod({ frequency: "daily", todayKey: "2026-10-26", timeZone: "UTC" });
-	const other = newsletter({ id: "74f1a2b3c4d5e6f7a8b9c0d4", name: "Field notes", subscribers: { joined: 2, left: 0, total: 40, previousTotal: 38, previousJoined: 1, bars: [{ startKey: "2026-10-19", endKey: "2026-10-25", joined: 2, left: 0 }] } });
 	return {
 		weekly: renderEmail().html,
 		daily: renderEmail({ frequency: "daily", period: daily }).html,
-		"with another newsletter": renderEmail({ newsletters: [newsletter(), other] }).html,
-		"with no issue, address or share link": renderEmail({ newsletters: [newsletter({ issue: null })], postalAddress: null, links: { ...LINKS, shareUrl: null } }).html,
+		"with no issue, address or share link": renderEmail({ newsletter: newsletter({ issue: null }), postalAddress: null, links: { ...LINKS, shareUrl: null } }).html,
 	};
 }
 
@@ -271,6 +287,9 @@ test("the summary email escapes what customers write and carries a one-click uns
 	assert.ok(!email.html.includes("<script>alert(1)"));
 	assert.ok(email.html.includes("&lt;script&gt;alert(1)&lt;/script&gt;"));
 	assert.ok(!email.html.includes("<b>Hens</b>"));
+	assert.ok(email.html.includes("summaries are on for &lt;b&gt;Hens&lt;/b&gt; &amp; co in MailCheap"), "the footer names the newsletter it's about");
+	assert.match(email.text, /summaries are on for <b>Hens<\/b> & co in MailCheap\./);
+	assert.ok(!email.html.includes("Your other newsletters"), "one newsletter per email");
 	assert.ok(!/href="javascript:/i.test(email.html), "only web links become the most clicked link");
 	assert.deepEqual(email.headers, {
 		"List-Unsubscribe": "<https://mail.example.com/api/summary/unsubscribe?token=token>",

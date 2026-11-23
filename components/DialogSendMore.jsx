@@ -27,7 +27,17 @@ import { toast } from "@/lib/toast";
 import { useToastError } from "@/lib/use-toast-error";
 import { useCleanupPreview } from "@/lib/use-cleanup-preview";
 
-export default function DialogSendMore({ campaignId, sentCount, remainingCount, emailsLeft, isCleanupEnabled, pace, newContacts = 0 }) {
+export default function DialogSendMore({
+	campaignId,
+	sentCount,
+	remainingCount,
+	emailsLeft,
+	isCleanupEnabled,
+	pace,
+	newContacts = 0,
+	gmailShare = 0,
+	isSharedSender = false,
+}) {
 	const router = useRouter();
 	const toastError = useToastError();
 	const [isOpen, setIsOpen] = useState(false);
@@ -73,7 +83,7 @@ export default function DialogSendMore({ campaignId, sentCount, remainingCount, 
 						{formatNumber(sentCount)} got it so far. The next most engaged contacts get it, and nobody receives it twice.
 					</DialogDescription>
 				</DialogHeader>
-				<NoticePace pace={pace} emails={emails} newContacts={newContacts} />
+				<NoticePace pace={pace} emails={emails} newContacts={newContacts} gmailShare={gmailShare} isSharedSender={isSharedSender} />
 				<InputAudienceLimit label="How many more" value={more} onChange={setMore} audienceCount={remaining} />
 				{isCleanupEnabled && <ListCleanupPreview summary={summary} isCounting={isCounting} error={preview?.error} />}
 				{isOverPlan && (

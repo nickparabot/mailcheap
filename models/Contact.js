@@ -1,5 +1,6 @@
 import mongoose from "mongoose";
 import { accountScoped } from "../lib/account-scope.js";
+import { AUDIENCE_SORT } from "../lib/audience.js";
 
 // pending: signed up to a newsletter that asks new subscribers to confirm, and hasn't yet.
 export const CONTACT_STATUSES = ["active", "pending", "unsubscribed", "bounced", "complained", "dormant"];
@@ -92,8 +93,13 @@ contactSchema.index({ newsletterId: 1, subscribedAt: -1, _id: -1 });
 contactSchema.index({ newsletterId: 1, status: 1, subscribedAt: -1, _id: -1 });
 // Segments on opens (lib/segments.js) read a range of it instead of every active contact of a large list.
 contactSchema.index({ newsletterId: 1, status: 1, lastOpenAt: -1 });
+// A send reads its audience in this order, most engaged first (lib/audience.js). Without it MongoDB sorts the whole list
+// in memory, and a send to a list past its 32 MB limit fails.
+contactSchema.index({ newsletterId: 1, status: 1, ...AUDIENCE_SORT });
 // A tag's contacts, newest first, for the list's tag filter and segments on tags, and the newsletter's tags.
 contactSchema.index({ newsletterId: 1, tags: 1, subscribedAt: -1, _id: -1 });
+// The same for a source, and the newsletter's sources.
+contactSchema.index({ newsletterId: 1, source: 1, subscribedAt: -1, _id: -1 });
 // The list cleanup totals in newsletter settings.
 contactSchema.index({ newsletterId: 1, lastChanceAt: 1 }, { partialFilterExpression: { lastChanceAt: { $exists: true } } });
 // An admin taking an address off the never-email list finds the contacts it stopped, in every account.

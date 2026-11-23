@@ -5,7 +5,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { getContactHistory } from "../lib/contact-history.js";
 import { flagUrl, getCountryName, readCountry } from "../lib/countries.js";
 import { getClickUrl } from "../lib/tracking.js";
-import { activate, as, callApi, catchNotFound, catchRedirect, form, signIn, startTestApp } from "./helpers/app.mjs";
+import { activate, addAuthor, as, callApi, catchNotFound, catchRedirect, form, signIn, startTestApp } from "./helpers/app.mjs";
 import { runWithRequest } from "./stubs/next-headers.mjs";
 import { flushAfter } from "./stubs/next-server.mjs";
 
@@ -141,6 +141,7 @@ describe("the contact page and its data", () => {
 			catchRedirect(m.newsletters.saveNewsletter(null, form({ name: `${user.slug} news`, slug: user.slug, postalAddress: "1 Main St, Paris", archiveEnabled: "on", ...fields })))
 		);
 		user.newsletterId = url.split("/").at(-1);
+		await addAuthor(user);
 		user.key = (await as(user, () => m.apiKeys.createApiKey(null, form({ name: "Full", level: "full" })))).key;
 		return user;
 	}
@@ -307,17 +308,57 @@ describe("the contact page and its data", () => {
 		const html = await renderPage(user, String(contact._id));
 		assert.ok(html.includes(">Jane</h1>"), "their first name heads the page");
 		assert.ok(html.includes("France") && html.includes("https://flagcdn.com/fr.svg"), "their country, with its flag");
+		assert.ok(html.includes("animate-globe-pulse"), "on the globe");
+		const header = html.match(/<header[^>]*>([\s\S]*?)<\/header>/)[1];
+		assert.match(header, /<span class="sr-only">Status: <\/span>.*?Active/, "their status, a button at the top");
+		assert.ok(header.includes('aria-label="More"'), "a ⋯ menu next to it");
+		assert.doesNotMatch(header, /Edit fields|Edit tags|Delete contact/, "editing and deleting are in it, not buttons of their own");
+		const tabs = [...html.matchAll(/<button([^>]*role="tab"[^>]*)>([\s\S]*?)<\/button>/g)].map(([, attributes, inner]) => [
+			inner.replace(/<[^>]+>/g, ""),
+			attributes.includes('aria-selected="true"'),
+		]);
+		assert.deepEqual(tabs, [["Activity", true], ["About", false], ["Fields and tags", false]], "the rest in three tabs, Activity open");
+		assert.ok(html.includes("aria-label=\"Copy {{first_name}}\"") && html.includes("aria-label=\"Copy {{plan}}\""), "each field with its tag");
+		assert.ok(html.includes("Email provider"), "what their inbox is, named");
 		assert.ok(html.includes("Hello Jane, on Pro"), "the subject as they got it, with their first name and fields");
 		assert.ok(html.includes(`href="/campaigns/`), "each issue links to its report");
 		assert.ok(html.includes("example.com/story") && html.includes("google.com/s2/favicons?domain=example.com"), "the link they clicked, with its favicon");
 		assert.ok(html.includes("Signed up on your website"));
 		assert.ok(html.includes("VIP readers") && !html.includes("Never opened"), "only the segments they're in");
 		assert.ok(html.includes(`href="/contacts?tag=vip"`));
+		assert.ok(html.includes(`href="/help/contacts#tags"`), "under their tags, how tags work");
 		assert.ok(html.includes(">100%<"), "opened their one email");
 
 		const other = await customer("contact-page-other@example.com");
 		assert.equal(await catchNotFound(renderPage(other, String(contact._id))), true, "another account gets a 404");
 		assert.equal(await catchNotFound(renderPage(user, "not-an-id")), true);
+	});
+
+	test("Edit fields and Edit tags each save only what they edit", async () => {
+		const user = await customer("contact-dialogs@example.com");
+		assert.equal((await callApi("POST", "/api/v1/contacts/fields", { key: user.key, body: { label: "Plan", type: "text" } })).status, 201);
+		const contact = await m.Contact.create({
+			accountId: user.accountId,
+			newsletterId: user.newsletterId,
+			email: "dialogs@example.org",
+			firstName: "Jane",
+			tags: ["vip"],
+			fields: { plan: "Pro" },
+		});
+		const id = String(contact._id);
+		const read = async () => {
+			const { firstName, fields, tags } = await findContact(user, "dialogs@example.org");
+			return { firstName, fields, tags };
+		};
+
+		assert.ok((await as(user, () => m.contacts.updateContactDetails(id, { firstName: "Jo", fields: { plan: "Team" } }))).contact);
+		assert.deepEqual(await read(), { firstName: "Jo", fields: { plan: "Team" }, tags: ["vip"] }, "Edit fields leaves the tags");
+
+		assert.ok((await as(user, () => m.contacts.updateContactDetails(id, { tags: ["vip", "beta"] }))).contact);
+		assert.deepEqual(await read(), { firstName: "Jo", fields: { plan: "Team" }, tags: ["vip", "beta"] }, "Edit tags leaves the rest");
+
+		assert.ok((await as(user, () => m.contacts.updateContactDetails(id, { tags: [] }))).contact);
+		assert.equal((await read()).tags, undefined, "and can take them all off");
 	});
 
 	test("the timeline shows the latest emails first, and older ones with what came before them on request", async () => {

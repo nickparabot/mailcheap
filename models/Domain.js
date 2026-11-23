@@ -20,6 +20,12 @@ const domainSchema = new mongoose.Schema(
 		records: [{ _id: false, purpose: String, type: { type: String }, name: String, value: String }],
 		// The DMARC record found on the domain, or on the closest parent with one (lib/dmarc-rules.js).
 		dmarc: { status: { type: String }, host: { type: String } },
+		// MailCheap's own last look at the records (lib/domain-dns.js): each one proxied, different or missing. Any of
+		// them stops a verified domain from sending, whatever the provider says.
+		dns: {
+			checkedAt: { type: Date },
+			problems: { type: [{ _id: false, purpose: String, type: { type: String }, name: String, state: String }], default: undefined },
+		},
 		// The last check, which PostShiba's verification budget counts from, and the Domains page's last read, which doesn't.
 		checkedAt: { type: Date },
 		readAt: { type: Date },
@@ -30,5 +36,7 @@ const domainSchema = new mongoose.Schema(
 
 domainSchema.plugin(accountScoped);
 domainSchema.index({ accountId: 1, createdAt: 1 });
+// The hourly cron's verified domains due for their daily look (lib/domains.js recheckDomains).
+domainSchema.index({ verified: 1, "dns.checkedAt": 1 });
 
 export default mongoose.models.Domain || mongoose.model("Domain", domainSchema);

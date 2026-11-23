@@ -1,7 +1,8 @@
 "use client";
 
 import { useId, useRef, useState } from "react";
-import { CalendarDays, X } from "lucide-react";
+import { CalendarDays } from "lucide-react";
+import ButtonClear from "@/components/ButtonClear";
 import CalendarMonth from "@/components/CalendarMonth";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { fromDayKey, toDayKey } from "@/lib/calendar";
@@ -74,19 +75,7 @@ export default function InputDate({
 						<span className={cn("truncate tabular-nums", !day && "text-muted-foreground")}>{day ? formatDate(day) : placeholder}</span>
 					</button>
 				</PopoverTrigger>
-				{canClear && (
-					<button
-						type="button"
-						aria-label="Clear the date"
-						onClick={clear}
-						className={cn(
-							"absolute top-1/2 grid -translate-y-1/2 place-items-center rounded-md text-muted-foreground outline-none transition-[color,background-color] duration-150 after:absolute after:-inset-1.5 hover:bg-muted hover:text-foreground focus-visible:ring-3 focus-visible:ring-ring/50 [&_svg]:size-3.5",
-							size === "sm" ? "right-1 size-5 [&_svg]:size-3" : "right-1.5 size-6"
-						)}
-					>
-						<X aria-hidden="true" />
-					</button>
-				)}
+				{canClear && <ButtonClear size={size} aria-label="Clear the date" onClick={clear} />}
 			</div>
 			<PopoverContent id={calendarId} align="start" aria-label="Pick a date" className="w-82 max-w-[calc(100vw-1rem)] p-3">
 				<CalendarMonth selected={day} min={fromDayKey(min)} max={fromDayKey(max)} onSelect={pick} autoFocus />

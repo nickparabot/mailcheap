@@ -27,8 +27,9 @@ import {
 	isSharedSenderReady,
 	withActiveProvider,
 } from "@/lib/sender-rules";
-import { getSelectedNewsletter } from "@/lib/selected-newsletter";
+import { requireRole } from "@/lib/selected-newsletter";
 import { refreshSharedSender } from "@/lib/shared-sender";
+import { OWNER_ROLE } from "@/lib/team-rules";
 import { cn } from "@/lib/utils";
 import Domain from "@/models/Domain";
 import Newsletter from "@/models/Newsletter";
@@ -37,7 +38,7 @@ export const metadata = { title: "Domains" };
 
 // The account's domains, which any of its newsletters can send from. "Check now" asks the email provider and DNS again.
 export default async function DomainsPage() {
-	const { account, selected } = await getSelectedNewsletter();
+	const { account, selected } = await requireRole(OWNER_ROLE);
 	const [stored, saved] = await Promise.all([
 		Domain.find(scoped(account)).sort({ createdAt: 1 }).lean(),
 		Newsletter.find(scoped(account)).sort({ createdAt: 1, _id: 1 }).select({ name: 1, slug: 1, fromEmail: 1, sharedSender: 1 }).lean(),
@@ -226,6 +227,7 @@ function CardDomain({ domain, newsletters, current, sharedDomain, stagger }) {
 function RowsSender({ domain, newsletters, current, sharedDomain }) {
 	const senders = newsletters.filter(({ fromEmail }) => getEmailDomain(fromEmail) === domain.domain);
 	const isCurrentSending = senders.some(({ _id }) => String(_id) === String(current._id));
+	const until = domain.dnsProblems.length > 0 ? "its records are fixed" : "it's verified";
 
 	return (
 		<>
@@ -238,7 +240,7 @@ function RowsSender({ domain, newsletters, current, sharedDomain }) {
 					<span className="min-w-0">
 						<span className="font-medium text-foreground">{newsletter.name}</span> sends from{" "}
 						<span className="font-mono text-[13px] wrap-anywhere text-foreground">{newsletter.fromEmail}</span>
-						{!domain.verified && " once it's verified"}
+						{!domain.verified && ` once ${until}`}
 					</span>
 					<LinkSender href={getSenderPath({ newsletterId: String(newsletter._id) })} className="ml-auto">
 						Sender
@@ -256,7 +258,7 @@ function RowsSender({ domain, newsletters, current, sharedDomain }) {
 					/>
 				) : (
 					<p className="border-t border-border/60 bg-muted/40 px-4 py-3 text-sm text-pretty text-muted-foreground">
-						Once it&apos;s verified, you can send <span className="font-medium text-foreground">{current.name}</span> from it here.
+						Once {until}, you can send <span className="font-medium text-foreground">{current.name}</span> from it here.
 					</p>
 				))}
 		</>

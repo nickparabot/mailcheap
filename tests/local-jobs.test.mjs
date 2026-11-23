@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { after, before, beforeEach, test } from "node:test";
 import mongoose from "mongoose";
-import { addVerifiedDomain, as, catchRedirect, form, signIn, startTestApp, withEnv } from "./helpers/app.mjs";
+import { addVerifiedDomain, addAuthor, as, catchRedirect, form, signIn, startTestApp, withEnv } from "./helpers/app.mjs";
 import { published } from "./stubs/qstash.mjs";
 
 // The local job queue (JOB_QUEUE=local) on a self-hosted server with no QStash at all: what the publishers queue, a send
@@ -101,6 +101,7 @@ test("a campaign goes out through the local queue: its batches are jobs, run in 
 	await addVerifiedDomain(user, "jobs-sender.dev");
 	const settings = { name: "Jobs", slug: "jobs-notes", fromName: "Jo", fromEmail: "hello@jobs-sender.dev", postalAddress: "1 Main St, Paris" };
 	const newsletterId = (await as(user, () => catchRedirect(m.newsletters.saveNewsletter(null, form(settings))))).split("/").at(-1);
+	await addAuthor(user, newsletterId);
 	const rows = ["a", "b", "c"].map((name) => ({ email: `${name}@readers.example.org`, status: "active" }));
 	await as(user, () => m.contacts.importContacts({ newsletterId, consent: true, rows }));
 	const id = (await as(user, () => catchRedirect(m.campaigns.createCampaign(newsletterId)))).split("/").at(-1);
